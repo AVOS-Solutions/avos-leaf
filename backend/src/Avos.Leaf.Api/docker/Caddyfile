@@ -1,0 +1,20 @@
+# Internal TLS sidecar for the api container. Terminates HTTPS with a self-signed
+# ("tls internal") certificate and reverse-proxies to the actual API process listening on
+# loopback:8080. Certificate verification is intentionally skipped by every caller — trust for this
+# hop comes from the Docker private network boundary, not a CA chain.
+#
+# Both hostnames below are real callers, not redundancy: the shared edge Caddy (a separate stack)
+# dials in as "leaf-api" (its avos-edge network alias — see docker-compose.prod.yml), while this
+# stack's own frontend container also dials in as "leaf-api" for its same-stack API calls (the
+# ambiguous bare "api" isn't safe to use for that hop: Compose registers a container's plain service
+# name on every network it joins, and once a second product's api container joins the shared
+# avos-edge network too, "api" resolves to whichever one Docker's DNS hands back). "api" is kept too
+# for anything still dialing in by the bare Compose service name. Caddy's automatic TLS scopes the
+# certificate — and which SNI it'll even accept a handshake for — to exactly the hostnames listed in
+# a site's address; a caller connecting with an SNI that isn't listed here gets the connection
+# rejected at the TLS layer (a raw "tlsv1 alert internal error", not a routing miss) — see
+# avos-quill's identical fix, caught live in production the same way.
+api:8443, leaf-api:8443 {
+	tls internal
+	reverse_proxy localhost:8080
+}

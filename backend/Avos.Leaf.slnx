@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Avos.Leaf.Api/Avos.Leaf.Api.csproj" />
+    <Project Path="src/Avos.Leaf.Domain/Avos.Leaf.Domain.csproj" />
+    <Project Path="src/Avos.Leaf.Infrastructure/Avos.Leaf.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Avos.Leaf.Tests/Avos.Leaf.Tests.csproj" />
+  </Folder>
+</Solution>
