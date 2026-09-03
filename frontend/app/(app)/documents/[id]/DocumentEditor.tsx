@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { PageSizes, PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 import { Button, Input } from "@/components/ui";
-import { loadPdfJs, toArrayBuffer } from "@/lib/pdfClient";
+import { loadPdfJs, renderPageToCanvas, toArrayBuffer } from "@/lib/pdfClient";
 import { AnnotateModal } from "./AnnotateModal";
 import { EditTextModal } from "./EditTextModal";
 import { RedactModal } from "./RedactModal";
@@ -32,6 +32,19 @@ import {
   RotateRangeModal,
   SplitToZipModal,
 } from "./CompetitiveTools2";
+import {
+  AddLinkModal,
+  BookmarksModal,
+  ClearMetadataModal,
+  DuplicateRangeModal,
+  FindMarkModal,
+  OpeningPageModal,
+  PageLabelsModal,
+  PhotoFiltersModal,
+  RedactPatternsModal,
+  RemoveLinksModal,
+  VisualCompareModal,
+} from "./CompetitiveTools3";
 
 const MAX_HISTORY = 20;
 
@@ -66,6 +79,17 @@ type SimpleModal =
   | "longImage"
   | "contactSheet"
   | "splitToZip"
+  | "redactPatterns"
+  | "findMark"
+  | "photoFilters"
+  | "duplicateRange"
+  | "bookmarks"
+  | "pageLabels"
+  | "openingPage"
+  | "clearMetadata"
+  | "addLink"
+  | "removeLinks"
+  | "visualCompare"
   | null;
 
 export function DocumentEditor({ documentId }: { documentId: string }) {
@@ -104,6 +128,16 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<number[] | null>(null);
   const [searching, setSearching] = useState(false);
+
+  const [jumpValue, setJumpValue] = useState("");
+  const [thumbSize, setThumbSize] = useState<"small" | "medium" | "large">("medium");
+  const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  const draftKey = `avos-leaf-draft-${documentId}`;
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [draftAvailable, setDraftAvailable] = useState<string | null>(null);
 
   const renderThumbnails = useCallback(async (doc: PDFDocument) => {
     setRendering(true);
@@ -148,6 +182,12 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         setFolderId(meta.folderId ?? null);
         setPdfDoc(doc);
         await renderThumbnails(doc);
+        try {
+          const raw = localStorage.getItem(`avos-leaf-draft-${documentId}`);
+          if (raw) setDraftAvailable((JSON.parse(raw) as { savedAt: string }).savedAt);
+        } catch {
+          // localStorage unavailable or the stored draft is corrupt — nothing to restore
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Could not load that document.");
       } finally {
@@ -160,6 +200,52 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
     };
   }, [documentId, renderThumbnails]);
 
+  /** Debounced local backup of the in-progress edit, so a crashed tab or an accidentally closed
+   *  window doesn't lose work that was never explicitly saved. Capped well under typical browser
+   *  localStorage quotas (~5-10MB) and wrapped defensively — a quota error or a document too big to
+   *  fit just means no local backup for this edit, never a user-facing failure. */
+  function scheduleDraftSave(doc: PDFDocument) {
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(async () => {
+      try {
+        const bytes = await doc.save();
+        if (bytes.byteLength > 3_000_000) return;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        localStorage.setItem(draftKey, JSON.stringify({ savedAt: new Date().toISOString(), base64: btoa(binary) }));
+      } catch {
+        // quota exceeded or localStorage unavailable — the autosave is best-effort only
+      }
+    }, 1500);
+  }
+
+  async function restoreDraft() {
+    try {
+      const raw = localStorage.getItem(draftKey);
+      if (!raw) return;
+      const { base64 } = JSON.parse(raw) as { base64: string };
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const restored = await PDFDocument.load(bytes);
+      setPdfDoc(restored);
+      setDirty(true);
+      setDraftAvailable(null);
+      await renderThumbnails(restored);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not restore that draft.");
+    }
+  }
+
+  function discardDraft() {
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      // nothing to clean up if storage was already unavailable
+    }
+    setDraftAvailable(null);
+  }
+
   /** Every direct page-level mutation (rotate, delete, reorder, insert, duplicate, merge, bulk
    *  rotate, watermark) goes through here so undo/redo, the dirty flag, and thumbnail re-rendering
    *  all stay in one place instead of being repeated at each call site. */
@@ -171,6 +257,7 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
     setRedoStack([]);
     setDirty(true);
     await renderThumbnails(pdfDoc);
+    scheduleDraftSave(pdfDoc);
   }
 
   /** Tool modals (annotate/redact/sign/fill-form/page-numbers/metadata/crop) mutate the shared
@@ -188,7 +275,10 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
     }
     setRedoStack([]);
     setDirty(true);
-    if (pdfDoc) await renderThumbnails(pdfDoc);
+    if (pdfDoc) {
+      await renderThumbnails(pdfDoc);
+      scheduleDraftSave(pdfDoc);
+    }
   }
 
   async function openTool(modal: Exclude<SimpleModal, null>) {
@@ -409,6 +499,11 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         body: JSON.stringify(pdfDoc.getPageCount()),
       });
       setDirty(false);
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        // nothing to clean up if storage was already unavailable
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not save your changes.");
     } finally {
@@ -435,6 +530,92 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
   }
+
+  function reversePages() {
+    withDoc((doc) => {
+      const pages = [...doc.getPages()].reverse();
+      const count = doc.getPageCount();
+      for (let i = count - 1; i >= 0; i--) doc.removePage(i);
+      pages.forEach((page, i) => doc.insertPage(i, page));
+    });
+  }
+
+  function submitJump(e: React.FormEvent) {
+    e.preventDefault();
+    const n = Number(jumpValue);
+    if (!Number.isInteger(n) || n < 1 || n > thumbnails.length) return;
+    jumpToPage(n - 1);
+  }
+
+  async function openPreview(index: number) {
+    if (!pdfDoc) return;
+    setPreviewIndex(index);
+    setPreviewLoading(true);
+    setPreviewSrc(null);
+    try {
+      const bytes = await pdfDoc.save();
+      const { canvas } = await renderPageToCanvas(bytes, index + 1, 2);
+      setPreviewSrc(canvas.toDataURL());
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function closePreview() {
+    setPreviewIndex(null);
+    setPreviewSrc(null);
+  }
+
+  // Keyboard shortcuts: Ctrl/Cmd+S saves, Ctrl/Cmd+P prints (both always, since they replace a
+  // browser default we deliberately want to override even while a form field has focus). Undo/redo
+  // only fire when focus isn't in a text field, so Ctrl+Z inside e.g. the header/footer text inputs
+  // still undoes a keystroke there rather than the whole document.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = e.key.toLowerCase();
+      if (key === "s") {
+        e.preventDefault();
+        save();
+        return;
+      }
+      if (key === "p") {
+        e.preventDefault();
+        printDoc();
+        return;
+      }
+      const target = document.activeElement;
+      const inTextField = target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (inTextField) return;
+      if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDoc, history, redoStack, docName]);
+
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [dirty]);
+
+  const THUMB_GRID = {
+    small: "grid-cols-3 sm:grid-cols-4 md:grid-cols-6",
+    medium: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4",
+    large: "grid-cols-1 sm:grid-cols-2 md:grid-cols-3",
+  } as const;
 
   if (loading) return <p className="text-sm text-slate">Loading…</p>;
   if (error && !pdfDoc) return <p className="text-sm text-brass">{error}</p>;
@@ -569,6 +750,42 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button className="shrink-0" variant="secondary" onClick={() => openTool("reorderPages")}>
             Reorder pages…
           </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("redactPatterns")}>
+            Redact by pattern…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("findMark")}>
+            Find &amp; mark…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("photoFilters")}>
+            Photo filters…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("duplicateRange")}>
+            Duplicate pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("bookmarks")}>
+            Bookmarks…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("pageLabels")}>
+            Page labels…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("openingPage")}>
+            Opening page…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("clearMetadata")}>
+            Clear metadata…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("addLink")}>
+            Add link…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("removeLinks")}>
+            Remove links…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("visualCompare")}>
+            Visual compare…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={reversePages}>
+            Reverse pages
+          </Button>
           <Button className="shrink-0" variant="secondary" onClick={() => rotateAll(90)}>
             Rotate all ⟳
           </Button>
@@ -618,13 +835,55 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
             </span>
           )}
         </form>
+
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <form onSubmit={submitJump} className="flex items-center gap-2">
+            <Input
+              className="w-24"
+              type="number"
+              min={1}
+              max={thumbnails.length}
+              placeholder="Page #"
+              value={jumpValue}
+              onChange={(e) => setJumpValue(e.target.value)}
+            />
+            <Button type="submit" variant="secondary">
+              Go
+            </Button>
+          </form>
+          <div className="flex items-center gap-1 text-xs text-slate">
+            <span>Thumbnail size:</span>
+            {(["small", "medium", "large"] as const).map((size) => (
+              <button
+                key={size}
+                type="button"
+                className={size === thumbSize ? "text-signal-dim underline" : "hover:text-ink"}
+                onClick={() => setThumbSize(size)}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
+
+      {draftAvailable && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-line bg-paper-dim p-2 text-xs text-ink">
+          <span>An unsaved draft from {new Date(draftAvailable).toLocaleString()} was found for this document.</span>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={discardDraft}>
+              Discard
+            </Button>
+            <Button onClick={restoreDraft}>Restore</Button>
+          </div>
+        </div>
+      )}
 
       {notice && <p className="mb-4 text-sm text-signal-dim">{notice}</p>}
       {error && <p className="mb-4 text-sm text-brass">{error}</p>}
       {rendering && <p className="mb-4 text-xs text-slate">Rendering…</p>}
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
+      <div className={`grid gap-4 ${THUMB_GRID[thumbSize]}`}>
         {thumbnails.map((src, index) => (
           <div
             key={index}
@@ -638,7 +897,12 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
             onDrop={() => onDropPage(index)}
           >
             {/* eslint-disable-next-line @next/next/no-img-element -- data: URLs from a canvas render, not an optimizable remote image */}
-            <img src={src} alt={`Page ${index + 1}`} className="pdf-page w-full rounded" />
+            <img
+              src={src}
+              alt={`Page ${index + 1}`}
+              className="pdf-page w-full cursor-zoom-in rounded"
+              onClick={() => !selectMode && openPreview(index)}
+            />
             <div className="mono absolute left-1 top-1 rounded bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">{index + 1}</div>
 
             {selectMode ? (
@@ -880,6 +1144,115 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         pageCount={thumbnails.length}
         onCreated={() => setNotice("Split complete.")}
       />
+      <RedactPatternsModal
+        open={activeModal === "redactPatterns"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <FindMarkModal
+        open={activeModal === "findMark"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <PhotoFiltersModal
+        open={activeModal === "photoFilters"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <DuplicateRangeModal
+        open={activeModal === "duplicateRange"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <BookmarksModal
+        open={activeModal === "bookmarks"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <PageLabelsModal
+        open={activeModal === "pageLabels"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <OpeningPageModal
+        open={activeModal === "openingPage"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <ClearMetadataModal
+        open={activeModal === "clearMetadata"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <AddLinkModal
+        open={activeModal === "addLink"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <RemoveLinksModal
+        open={activeModal === "removeLinks"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <VisualCompareModal
+        open={activeModal === "visualCompare"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+      />
+
+      {previewIndex !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/70 p-4" onClick={closePreview}>
+          <div className="relative max-h-full max-w-full" onClick={(e) => e.stopPropagation()}>
+            {previewLoading || !previewSrc ? (
+              <p className="text-sm text-paper">Rendering…</p>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element -- data: URL from a canvas render, not an optimizable remote image
+              <img src={previewSrc} alt={`Page ${previewIndex + 1}`} className="max-h-[85vh] max-w-full rounded bg-white" />
+            )}
+            <div className="mt-3 flex items-center justify-center gap-4">
+              <Button
+                variant="secondary"
+                onClick={() => previewIndex > 0 && openPreview(previewIndex - 1)}
+                disabled={previewIndex <= 0}
+              >
+                ← Previous
+              </Button>
+              <span className="mono text-sm text-paper">
+                {previewIndex + 1} / {thumbnails.length}
+              </span>
+              <Button
+                variant="secondary"
+                onClick={() => previewIndex < thumbnails.length - 1 && openPreview(previewIndex + 1)}
+                disabled={previewIndex >= thumbnails.length - 1}
+              >
+                Next →
+              </Button>
+              <Button variant="secondary" onClick={closePreview}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

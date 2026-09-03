@@ -1,0 +1,398 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { Button, Input, Label, Modal, Textarea } from "@/components/ui";
+import { toArrayBuffer } from "@/lib/pdfClient";
+
+async function uploadPdf(bytes: Uint8Array, name: string, folderId: string | null) {
+  const form = new FormData();
+  form.append("file", new Blob([toArrayBuffer(bytes)], { type: "application/pdf" }), name);
+  if (folderId) form.append("folderId", folderId);
+  const response = await fetch("/api/documents/upload", { method: "POST", body: form });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message ?? `Could not create "${name}".`);
+  return body as { id: string; name: string };
+}
+
+// -------------------------------------------------------------------------------------------
+// Merge multiple PDFs: the editor's own "Merge PDF" only ever appends one file at a time to the
+// currently open document — this is the flagship "combine several files into one" flow most PDF
+// tools lead with, working entirely from local files (Combine documents… next to it covers the
+// same idea for files already saved in this account's library).
+
+type PickedFile = { id: string; file: File };
+
+export function MergeMultipleModal({
+  open,
+  onClose,
+  folderId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  folderId: string | null;
+  onCreated: () => void;
+}) {
+  const [files, setFiles] = useState<PickedFile[]>([]);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const nextId = useRef(0);
+
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the form each time the modal (re)opens
+      setFiles([]);
+      setError(null);
+    }
+  }, [open]);
+
+  function addFiles(list: FileList | null) {
+    if (!list) return;
+    const picked = Array.from(list).map((file) => ({ id: `${Date.now()}-${nextId.current++}`, file }));
+    setFiles((prev) => [...prev, ...picked]);
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    setFiles((prev) => {
+      const target = index + direction;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  function remove(id: string) {
+    setFiles((prev) => prev.filter((f) => f.id !== id));
+  }
+
+  async function run() {
+    if (files.length < 2) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const { PDFDocument } = await import("pdf-lib");
+      const merged = await PDFDocument.create();
+      for (const { file } of files) {
+        const bytes = await file.arrayBuffer();
+        const source = await PDFDocument.load(bytes);
+        const pages = await merged.copyPages(source, source.getPageIndices());
+        pages.forEach((page) => merged.addPage(page));
+      }
+      const bytes = await merged.save();
+      await uploadPdf(bytes, "Merged.pdf", folderId);
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not merge these files. Make sure they're all PDFs.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Merge multiple PDFs">
+      <div className="space-y-4">
+        <p className="text-xs text-slate">Pick several PDF files from your computer, arrange their order, and combine them into one new document.</p>
+        <input ref={inputRef} type="file" accept="application/pdf" multiple className="hidden" onChange={(e) => addFiles(e.target.files)} />
+        <Button variant="secondary" onClick={() => inputRef.current?.click()}>
+          Add files…
+        </Button>
+        {files.length > 0 && (
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-line p-2">
+            {files.map((f, i) => (
+              <div key={f.id} className="flex items-center gap-2 text-sm">
+                <span className="mono w-6 shrink-0 text-xs text-slate">{i + 1}.</span>
+                <span className="min-w-0 flex-1 truncate">{f.file.name}</span>
+                <button type="button" className="text-xs text-slate hover:text-ink disabled:opacity-30" onClick={() => move(i, -1)} disabled={i === 0}>
+                  ↑
+                </button>
+                <button
+                  type="button"
+                  className="text-xs text-slate hover:text-ink disabled:opacity-30"
+                  onClick={() => move(i, 1)}
+                  disabled={i === files.length - 1}
+                >
+                  ↓
+                </button>
+                <button type="button" className="text-xs text-brass" onClick={() => remove(f.id)}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {error && <p className="text-sm text-brass">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={run} disabled={working || files.length < 2}>
+            {working ? "Merging…" : "Merge"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// New PDF from Markdown: a step up from "New PDF from text" for anyone drafting notes in
+// Markdown — headers, bullet lists, and blank-line paragraph breaks get real formatting instead of
+// being rendered as literal "# " characters. Deliberately covers only the common subset (no tables,
+// links, or inline code) rather than a half-working stab at the whole spec.
+
+export function MarkdownToPdfModal({
+  open,
+  onClose,
+  folderId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  folderId: string | null;
+  onCreated: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [body, setBody] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the form each time the modal (re)opens
+      setTitle("");
+      setBody("");
+      setError(null);
+    }
+  }, [open]);
+
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const { PDFDocument, StandardFonts, PageSizes } = await import("pdf-lib");
+      const doc = await PDFDocument.create();
+      const regular = await doc.embedFont(StandardFonts.Helvetica);
+      const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+      const margin = 54;
+      const [pageWidth, pageHeight] = PageSizes.A4;
+      const maxWidth = pageWidth - margin * 2;
+
+      type Line = { text: string; size: number; font: typeof regular; indent: number; spaceAfter: number };
+      const lines: Line[] = [];
+
+      function wrap(text: string, size: number, font: typeof regular, indent: number, spaceAfter: number) {
+        let current = "";
+        const availableWidth = maxWidth - indent;
+        for (const word of text.split(" ")) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (font.widthOfTextAtSize(candidate, size) > availableWidth && current) {
+            lines.push({ text: current, size, font, indent, spaceAfter: 0 });
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        lines.push({ text: current, size, font, indent, spaceAfter });
+      }
+
+      for (const raw of body.split("\n")) {
+        const line = raw.trimEnd();
+        if (!line.trim()) {
+          lines.push({ text: "", size: 11, font: regular, indent: 0, spaceAfter: 6 });
+          continue;
+        }
+        const h3 = line.match(/^###\s+(.*)/);
+        const h2 = line.match(/^##\s+(.*)/);
+        const h1 = line.match(/^#\s+(.*)/);
+        const bullet = line.match(/^[-*]\s+(.*)/);
+        if (h1) wrap(h1[1].replace(/\*\*/g, ""), 20, bold, 0, 10);
+        else if (h2) wrap(h2[1].replace(/\*\*/g, ""), 16, bold, 0, 8);
+        else if (h3) wrap(h3[1].replace(/\*\*/g, ""), 13, bold, 0, 6);
+        else if (bullet) wrap(`•  ${bullet[1].replace(/\*\*/g, "")}`, 11, regular, 14, 2);
+        else {
+          const isBoldLine = /^\*\*(.*)\*\*$/.test(line.trim());
+          const text = line.trim().replace(/^\*\*(.*)\*\*$/, "$1").replace(/\*\*/g, "");
+          wrap(text, 11, isBoldLine ? bold : regular, 0, 4);
+        }
+      }
+
+      let page = doc.addPage(PageSizes.A4);
+      let y = pageHeight - margin;
+      for (const line of lines) {
+        if (y < margin) {
+          page = doc.addPage(PageSizes.A4);
+          y = pageHeight - margin;
+        }
+        if (line.text) page.drawText(line.text, { x: margin + line.indent, y, size: line.size, font: line.font });
+        y -= line.size * 1.35 + line.spaceAfter;
+      }
+
+      const bytes = await doc.save();
+      const name = `${(title.trim() || "Untitled").replace(/\.pdf$/i, "")}.pdf`;
+      await uploadPdf(bytes, name, folderId);
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create that document.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="New PDF from Markdown">
+      <form onSubmit={run} className="space-y-4">
+        <div>
+          <Label htmlFor="md-title">Title</Label>
+          <Input id="md-title" placeholder="Untitled" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="md-body">Markdown</Label>
+          <Textarea
+            id="md-body"
+            rows={12}
+            required
+            autoFocus
+            placeholder={"# Heading\n\nA paragraph of text.\n\n- A bullet\n- Another bullet"}
+            className="mono"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-slate">Supports #/##/### headings, - or * bullets, **bold**, and blank-line paragraph breaks.</p>
+        </div>
+        {error && <p className="text-sm text-brass">{error}</p>}
+        <Button type="submit" className="w-full" disabled={working}>
+          {working ? "Creating…" : "Create PDF"}
+        </Button>
+      </form>
+    </Modal>
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// CSV to PDF: renders simple comma-separated data as a paginated table with a bolded header row —
+// column widths are computed from the data itself so a spreadsheet export doesn't need any manual
+// layout. Deliberately handles only unquoted CSV (the common case for pasted/exported data); a
+// field containing a literal comma needs to be re-separated by hand first.
+
+export function CsvToPdfModal({
+  open,
+  onClose,
+  folderId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  folderId: string | null;
+  onCreated: () => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [csv, setCsv] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the form each time the modal (re)opens
+      setTitle("");
+      setCsv("");
+      setError(null);
+    }
+  }, [open]);
+
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    const rows = csv
+      .split("\n")
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => r.split(",").map((cell) => cell.trim()));
+    if (rows.length === 0) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const { PDFDocument, StandardFonts, PageSizes, rgb } = await import("pdf-lib");
+      const doc = await PDFDocument.create();
+      const regular = await doc.embedFont(StandardFonts.Helvetica);
+      const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+      const margin = 36;
+      const [pageWidth, pageHeight] = [PageSizes.A4[1], PageSizes.A4[0]]; // landscape — tables are usually wider than tall
+      const size = 9;
+      const rowHeight = size * 2.2;
+      const columnCount = Math.max(...rows.map((r) => r.length));
+      const tableWidth = pageWidth - margin * 2;
+      const columnWidths = Array.from({ length: columnCount }, (_, col) => {
+        const maxLen = Math.max(...rows.map((r) => (r[col] ?? "").length), 3);
+        return maxLen;
+      });
+      const totalUnits = columnWidths.reduce((a, b) => a + b, 0);
+      const colPx = columnWidths.map((units) => (units / totalUnits) * tableWidth);
+
+      let page = doc.addPage([pageWidth, pageHeight]);
+      let y = pageHeight - margin;
+      rows.forEach((row, rowIndex) => {
+        if (y < margin + rowHeight) {
+          page = doc.addPage([pageWidth, pageHeight]);
+          y = pageHeight - margin;
+        }
+        const isHeader = rowIndex === 0;
+        if (isHeader) {
+          page.drawRectangle({ x: margin, y: y - rowHeight + size * 0.3, width: tableWidth, height: rowHeight, color: rgb(0.92, 0.92, 0.9) });
+        }
+        let x = margin;
+        row.forEach((cell, col) => {
+          const w = colPx[col] ?? tableWidth / columnCount;
+          const text = cell.length > 40 ? `${cell.slice(0, 37)}…` : cell;
+          page.drawText(text, { x: x + 3, y: y - rowHeight + size * 0.8, size, font: isHeader ? bold : regular });
+          x += w;
+        });
+        page.drawLine({ start: { x: margin, y: y - rowHeight }, end: { x: margin + tableWidth, y: y - rowHeight }, thickness: 0.5, color: rgb(0.8, 0.8, 0.8) });
+        y -= rowHeight;
+      });
+
+      const bytes = await doc.save();
+      const name = `${(title.trim() || "Table").replace(/\.pdf$/i, "")}.pdf`;
+      await uploadPdf(bytes, name, folderId);
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create that document.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="CSV to PDF">
+      <form onSubmit={run} className="space-y-4">
+        <div>
+          <Label htmlFor="csv-title">Title</Label>
+          <Input id="csv-title" placeholder="Table" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="csv-body">CSV data</Label>
+          <Textarea
+            id="csv-body"
+            rows={12}
+            required
+            autoFocus
+            placeholder={"Name,Amount,Date\nAcme Inc,1200,2026-01-15"}
+            className="mono"
+            value={csv}
+            onChange={(e) => setCsv(e.target.value)}
+          />
+          <p className="mt-1 text-xs text-slate">The first row is treated as a header. Fields with a literal comma aren&apos;t supported.</p>
+        </div>
+        {error && <p className="text-sm text-brass">{error}</p>}
+        <Button type="submit" className="w-full" disabled={working}>
+          {working ? "Creating…" : "Create PDF"}
+        </Button>
+      </form>
+    </Modal>
+  );
+}

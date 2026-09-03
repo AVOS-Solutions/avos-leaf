@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Input, Label, Modal, PageHeader, Select, Textarea } from "@/components/ui";
 import { toArrayBuffer } from "@/lib/pdfClient";
 import type { DocumentSummary, FolderSummary } from "@/lib/types";
+import { CsvToPdfModal, MarkdownToPdfModal, MergeMultipleModal } from "./ListTools";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -51,6 +52,19 @@ export function DocumentsClient() {
   const [combineSelected, setCombineSelected] = useState<string[]>([]);
   const [combining, setCombining] = useState(false);
   const [combineError, setCombineError] = useState<string | null>(null);
+
+  const [mergeMultipleOpen, setMergeMultipleOpen] = useState(false);
+  const [markdownPdfOpen, setMarkdownPdfOpen] = useState(false);
+  const [csvPdfOpen, setCsvPdfOpen] = useState(false);
+
+  const [sortBy, setSortBy] = useState<"name" | "date" | "size">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkWorking, setBulkWorking] = useState(false);
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [zipping, setZipping] = useState(false);
 
   const loadFolders = useCallback(async () => {
     const response = await fetch("/api/backend/folders");
@@ -370,6 +384,193 @@ export function DocumentsClient() {
     await loadDocuments();
   }
 
+  const sortedDocuments = [...documents].sort((a, b) => {
+    let cmp = 0;
+    if (sortBy === "name") cmp = a.name.localeCompare(b.name);
+    else if (sortBy === "size") cmp = a.sizeBytes - b.sizeBytes;
+    else cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
+  function toggleBulkMode() {
+    setBulkMode((prev) => !prev);
+    setBulkSelected(new Set());
+  }
+
+  function toggleBulkSelected(id: string) {
+    setBulkSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkTrash() {
+    setBulkWorking(true);
+    try {
+      await Promise.all([...bulkSelected].map((id) => fetch(`/api/backend/documents/${id}`, { method: "DELETE" })));
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function bulkStar(starred: boolean) {
+    setBulkWorking(true);
+    try {
+      await Promise.all(
+        [...bulkSelected].map((id) =>
+          fetch(`/api/backend/documents/${id}/star`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ starred }),
+          }),
+        ),
+      );
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function bulkDeleteForever() {
+    if (!confirm(`Permanently delete ${bulkSelected.size} document${bulkSelected.size === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    setBulkWorking(true);
+    try {
+      await Promise.all([...bulkSelected].map((id) => fetch(`/api/backend/documents/${id}/forever`, { method: "DELETE" })));
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function bulkMoveTo(newFolderId: string) {
+    setBulkWorking(true);
+    try {
+      await Promise.all(
+        [...bulkSelected].map((id) =>
+          fetch(`/api/backend/documents/${id}/move`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folderId: newFolderId || null }),
+          }),
+        ),
+      );
+      setBulkMoveOpen(false);
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  /** Shared by "download selected as zip" and "download this folder as zip" — the only difference
+   *  is which document ids feed in, so both funnel through here rather than duplicating the
+   *  fetch-then-zip loop. */
+  async function downloadDocumentsAsZip(ids: string[], zipName: string) {
+    if (ids.length === 0) return;
+    setZipping(true);
+    try {
+      const { default: JSZip } = await import("jszip");
+      const zip = new JSZip();
+      const byId = new Map(documents.map((d) => [d.id, d]));
+      for (const id of ids) {
+        const response = await fetch(`/api/documents/${id}/content`);
+        if (!response.ok) continue;
+        const bytes = await response.arrayBuffer();
+        const name = byId.get(id)?.name ?? `${id}.pdf`;
+        zip.file(name.toLowerCase().endsWith(".pdf") ? name : `${name}.pdf`, bytes);
+      }
+      const blob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = zipName;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setZipping(false);
+    }
+  }
+
+  /** Fetches every selected document's current content and combines them client-side, without
+   *  uploading anything — for a one-off print or download rather than a new library entry (that's
+   *  what Combine documents… is for). */
+  async function mergeSelectedInMemory(): Promise<Uint8Array | null> {
+    if (bulkSelected.size === 0) return null;
+    const { PDFDocument } = await import("pdf-lib");
+    const merged = await PDFDocument.create();
+    for (const id of bulkSelected) {
+      const response = await fetch(`/api/documents/${id}/content`);
+      if (!response.ok) continue;
+      const bytes = await response.arrayBuffer();
+      const source = await PDFDocument.load(bytes);
+      const pages = await merged.copyPages(source, source.getPageIndices());
+      pages.forEach((page) => merged.addPage(page));
+    }
+    return merged.save();
+  }
+
+  async function printSelected() {
+    setBulkWorking(true);
+    try {
+      const bytes = await mergeSelectedInMemory();
+      if (!bytes) return;
+      const blob = new Blob([toArrayBuffer(bytes)], { type: "application/pdf" });
+      window.open(URL.createObjectURL(blob), "_blank");
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function downloadSelectedMerged() {
+    setBulkWorking(true);
+    try {
+      const bytes = await mergeSelectedInMemory();
+      if (!bytes) return;
+      const blob = new Blob([toArrayBuffer(bytes)], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "Combined.pdf";
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function emptyTrash() {
+    if (documents.length === 0) return;
+    if (!confirm(`Permanently delete all ${documents.length} document${documents.length === 1 ? "" : "s"} in Trash? This cannot be undone.`)) return;
+    setBulkWorking(true);
+    try {
+      await Promise.all(documents.map((d) => fetch(`/api/backend/documents/${d.id}/forever`, { method: "DELETE" })));
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  function exportListAsCsv() {
+    const header = ["Name", "Size (bytes)", "Pages", "Created", "Last modified"];
+    const rows = sortedDocuments.map((d) => [d.name, String(d.sizeBytes), String(d.pageCount ?? ""), d.createdAt, d.updatedAt]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((cell) => (/[",\n]/.test(cell) ? `"${cell.replace(/"/g, '""')}"` : cell)).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "documents.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <>
       <PageHeader
@@ -399,8 +600,17 @@ export function DocumentsClient() {
               <Button variant="secondary" onClick={() => setTextPdfOpen(true)}>
                 New PDF from text…
               </Button>
+              <Button variant="secondary" onClick={() => setMarkdownPdfOpen(true)}>
+                Markdown to PDF…
+              </Button>
+              <Button variant="secondary" onClick={() => setCsvPdfOpen(true)}>
+                CSV to PDF…
+              </Button>
               <Button variant="secondary" onClick={openCombine}>
                 Combine documents…
+              </Button>
+              <Button variant="secondary" onClick={() => setMergeMultipleOpen(true)}>
+                Merge multiple PDFs…
               </Button>
             </div>
           )
@@ -435,6 +645,80 @@ export function DocumentsClient() {
         </div>
       )}
 
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2 text-slate">
+          <span>Sort by:</span>
+          <Select className="w-auto" value={sortBy} onChange={(e) => setSortBy(e.target.value as typeof sortBy)}>
+            <option value="name">Name</option>
+            <option value="date">Last modified</option>
+            <option value="size">Size</option>
+          </Select>
+          <button className="hover:text-ink" onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}>
+            {sortDir === "asc" ? "↑ Ascending" : "↓ Descending"}
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {view === "trash" ? (
+            documents.length > 0 && (
+              <Button variant="danger" onClick={emptyTrash} disabled={bulkWorking}>
+                Empty trash
+              </Button>
+            )
+          ) : (
+            <>
+              <Button variant="secondary" onClick={exportListAsCsv} disabled={documents.length === 0}>
+                Export list as CSV
+              </Button>
+              <Button variant="secondary" onClick={() => downloadDocumentsAsZip(documents.map((d) => d.id), "documents.zip")} disabled={zipping || documents.length === 0}>
+                {zipping ? "Zipping…" : "Download all as zip"}
+              </Button>
+            </>
+          )}
+          <Button variant={bulkMode ? "primary" : "secondary"} onClick={toggleBulkMode}>
+            {bulkMode ? "Cancel select" : "Select…"}
+          </Button>
+        </div>
+      </div>
+
+      {bulkMode && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-paper-dim p-2 text-xs">
+          <span className="text-slate">{bulkSelected.size} selected</span>
+          {view === "trash" ? (
+            <Button variant="danger" onClick={bulkDeleteForever} disabled={bulkSelected.size === 0 || bulkWorking}>
+              Delete forever
+            </Button>
+          ) : (
+            <>
+              <Button variant="secondary" onClick={() => setBulkMoveOpen(true)} disabled={bulkSelected.size === 0}>
+                Move…
+              </Button>
+              <Button variant="danger" onClick={bulkTrash} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Trash
+              </Button>
+              <Button variant="secondary" onClick={() => bulkStar(true)} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Star
+              </Button>
+              <Button variant="secondary" onClick={() => bulkStar(false)} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Unstar
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => downloadDocumentsAsZip([...bulkSelected], "documents.zip")}
+                disabled={bulkSelected.size === 0 || zipping}
+              >
+                {zipping ? "Zipping…" : "Download as zip"}
+              </Button>
+              <Button variant="secondary" onClick={printSelected} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Print merged
+              </Button>
+              <Button variant="secondary" onClick={downloadSelectedMerged} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Download merged
+              </Button>
+            </>
+          )}
+        </div>
+      )}
+
       {error && <p className="mb-4 text-sm text-brass">{error}</p>}
 
       {loading ? (
@@ -466,19 +750,24 @@ export function DocumentsClient() {
             </p>
           )}
 
-          {documents.map((doc) => (
+          {sortedDocuments.map((doc) => (
             <Card key={doc.id} className="flex flex-col items-start gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-              <div className="min-w-0 sm:flex-1">
-                {view === "trash" ? (
-                  <span className="block truncate text-ink-soft">{doc.name}</span>
-                ) : (
-                  <Link href={`/documents/${doc.id}`} className="block truncate text-ink no-underline hover:text-signal-dim">
-                    📄 {doc.name}
-                  </Link>
+              <div className="flex min-w-0 items-center gap-2 sm:flex-1">
+                {bulkMode && (
+                  <input type="checkbox" checked={bulkSelected.has(doc.id)} onChange={() => toggleBulkSelected(doc.id)} className="h-4 w-4 shrink-0" />
                 )}
-                <span className="mono text-xs text-slate">
-                  {formatBytes(doc.sizeBytes)} · {doc.pageCount || "?"} pages
-                </span>
+                <div className="min-w-0">
+                  {view === "trash" ? (
+                    <span className="block truncate text-ink-soft">{doc.name}</span>
+                  ) : (
+                    <Link href={`/documents/${doc.id}`} className="block truncate text-ink no-underline hover:text-signal-dim">
+                      📄 {doc.name}
+                    </Link>
+                  )}
+                  <span className="mono text-xs text-slate">
+                    {formatBytes(doc.sizeBytes)} · {doc.pageCount || "?"} pages
+                  </span>
+                </div>
               </div>
               <div className="flex flex-wrap gap-3 text-xs text-slate sm:shrink-0">
                 {view === "trash" ? (
@@ -562,6 +851,23 @@ export function DocumentsClient() {
           </Select>
         </div>
       </Modal>
+
+      <Modal open={bulkMoveOpen} onClose={() => setBulkMoveOpen(false)} title="Move selected to folder">
+        <div className="space-y-4">
+          <Select defaultValue="" onChange={(e) => bulkMoveTo(e.target.value)}>
+            <option value="">Root</option>
+            {folders.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </Modal>
+
+      <MergeMultipleModal open={mergeMultipleOpen} onClose={() => setMergeMultipleOpen(false)} folderId={folderId} onCreated={loadDocuments} />
+      <MarkdownToPdfModal open={markdownPdfOpen} onClose={() => setMarkdownPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />
+      <CsvToPdfModal open={csvPdfOpen} onClose={() => setCsvPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />
 
       <Modal open={textPdfOpen} onClose={() => setTextPdfOpen(false)} title="New PDF from text">
         <form onSubmit={createTextPdf} className="space-y-4">
