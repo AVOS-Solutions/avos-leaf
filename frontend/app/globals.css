@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #161225;
+  --ink-soft: #2b2140;
+  --paper: #f4eee2;
+  --paper-dim: #e9ddc9;
+  --signal: #e0a437;
+  --signal-dim: #b8822a;
+  --slate: #6b6478;
+  --brass: #c1502e;
+  --line: rgba(22, 18, 37, 0.12);
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-paper: var(--paper);
+  --color-paper-dim: var(--paper-dim);
+  --color-signal: var(--signal);
+  --color-signal-dim: var(--signal-dim);
+  --color-slate: var(--slate);
+  --color-brass: var(--brass);
+  --color-line: var(--line);
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --font-sans: var(--font-ibm-plex-sans);
+  --font-mono: var(--font-ibm-plex-mono);
+  --font-display: var(--font-fragment-mono);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ibm-plex-sans), sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-fragment-mono), monospace;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: #08100f;
+}
+
+.mono {
+  font-family: var(--font-ibm-plex-mono), monospace;
+}
+
+.eyebrow {
+  font-family: var(--font-ibm-plex-mono), monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--slate);
+}
+
+/* Native <button> defaults to cursor:default, not pointer (unlike <a>) — matches avos-erp /
+   avos-solutions.com's `button, .btn { cursor:pointer; }` rule so every button reads as clickable. */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 3px;
+}
+
+/* PDF viewer/editor surface: each rendered page is a canvas sized by pdf.js's own viewport
+   calculation, stacked in a scrollable column — no fixed coordinate space to fight with, unlike a
+   slide-editor canvas. */
+.pdf-page {
+  background: #fff;
+  box-shadow: 0 1px 3px var(--line);
+}
+
+.pdf-page-selected {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
