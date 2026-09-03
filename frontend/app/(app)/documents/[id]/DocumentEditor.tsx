@@ -6,6 +6,7 @@ import { PageSizes, PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 import { Button, Input } from "@/components/ui";
 import { loadPdfJs, toArrayBuffer } from "@/lib/pdfClient";
 import { AnnotateModal } from "./AnnotateModal";
+import { EditTextModal } from "./EditTextModal";
 import { RedactModal } from "./RedactModal";
 import { SignModal } from "./SignModal";
 import { FillFormModal } from "./FillFormModal";
@@ -46,6 +47,7 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
   const [activeModal, setActiveModal] = useState<SimpleModal>(null);
   const [annotatePage, setAnnotatePage] = useState<number | null>(null);
   const [redactPage, setRedactPage] = useState<number | null>(null);
+  const [editTextPage, setEditTextPage] = useState<number | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<number[] | null>(null);
@@ -150,6 +152,11 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
   async function openRedact(index: number) {
     await beginToolMutation();
     setRedactPage(index);
+  }
+
+  async function openEditText(index: number) {
+    await beginToolMutation();
+    setEditTextPage(index);
   }
 
   async function undo() {
@@ -534,6 +541,9 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
                 <button className="mono text-xs text-paper hover:text-signal" title="Insert blank page after" onClick={() => insertBlankPage(index)}>
                   +
                 </button>
+                <button className="mono text-xs text-paper hover:text-signal" title="Edit text" onClick={() => openEditText(index)}>
+                  Tt
+                </button>
                 <button className="mono text-xs text-paper hover:text-signal" title="Annotate" onClick={() => openAnnotate(index)}>
                   ✎
                 </button>
@@ -561,6 +571,13 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         onClose={() => setRedactPage(null)}
         pdfDoc={pdfDoc}
         pageIndex={redactPage ?? 0}
+        onApplied={onToolApplied}
+      />
+      <EditTextModal
+        open={editTextPage !== null}
+        onClose={() => setEditTextPage(null)}
+        pdfDoc={pdfDoc}
+        pageIndex={editTextPage ?? 0}
         onApplied={onToolApplied}
       />
       <SignModal
