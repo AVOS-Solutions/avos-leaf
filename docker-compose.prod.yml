@@ -1,0 +1,121 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: avos_leaf
+      POSTGRES_USER: avos_leaf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Postgres password required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avos_leaf -d avos_leaf"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: src/Avos.Leaf.Api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=avos_leaf;Username=avos_leaf;Password=${POSTGRES_PASSWORD:?Postgres password required}"
+      Jwt__Key: ${JWT_KEY:?JWT signing key required}
+      Jwt__Issuer: avos-leaf
+      Jwt__Audience: avos-leaf-clients
+      Leaf__EncryptionKey: ${LEAF_ENCRYPTION_KEY:?Field encryption key required}
+      # LocalBlobStorageService writes encrypted PDF bytes as plain files under this path — see its
+      # own doc comment. Backed by the leaffiles volume below so it survives container recreation.
+      Leaf__StoragePath: /data/leaf-files
+      # avos-leaf has no password store of its own — every credential check round-trips to this
+      # avos-licensing deployment server-to-server (see IdentityLicensingClient). Point it at the
+      # public URL of whichever avos-licensing instance issues avos-leaf's licenses — IMPORTANT: this
+      # client has no option to skip certificate verification, so it must be a URL a public CA chain
+      # can validate (e.g. https://licensing.yourdomain.com), never an internal avos-edge alias with
+      # a self-signed sidecar cert (unlike avos-vault's LICENSING_BASE_URL, which does support that).
+      Licensing__BaseUrl: ${LICENSING_BASE_URL:?The avos-licensing base URL is required}
+      Licensing__LeafApplicationId: ${LICENSING_LEAF_APPLICATION_ID:?The avos-leaf LicensedApplication id from avos-licensing is required}
+      # Server-to-server SSO token exchange (POST /api/sso/token — see IdentityLicensingClient) needs
+      # this in addition to the application id above; without it, SSO sign-in silently fails (logs
+      # "SSO sign-in is unavailable" and nothing else) rather than erroring loudly at startup.
+      Licensing__SsoClientSecret: ${LICENSING_LEAF_SSO_SECRET:?The avos-leaf application's SSO client secret from avos-licensing is required}
+      Cors__FrontendOrigin: "https://${DOMAIN:?Domain required}"
+      ASPNETCORE_ENVIRONMENT: Production
+      # Loopback-only: the plain-HTTP Kestrel process is reachable only from the Caddy TLS sidecar
+      # (see backend/src/Avos.Leaf.Api/docker/Caddyfile) running in the same container, not from
+      # other containers on the Docker network directly.
+      ASPNETCORE_URLS: "http://127.0.0.1:8080"
+    volumes:
+      - leaffiles:/data/leaf-files
+    networks:
+      default:
+      # Reachable from the shared edge Caddy (a separate stack, not part of this repo — see
+      # DEPLOY.md's "Shared edge Caddy" section) as leaf-api:8443. avos-leaf currently has no
+      # anonymous public route that would need this — kept for consistency/future use, same as
+      # avos-vault's own api service.
+      avos-edge:
+        aliases:
+          - leaf-api
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # https://leaf-api:8443 is the api container's Caddy TLS sidecar, not the api process's own
+      # plain-HTTP port (which is loopback-only in this container — see api's ASPNETCORE_URLS
+      # above).
+      #
+      # Deliberately the product-qualified alias, not the bare "api" the api service also answers to
+      # on its own private default network: Compose registers a container's plain service name on
+      # *every* network it joins, not just its own project's default one, and this container is also
+      # on the shared avos-edge network for the edge Caddy's sake. Once a second product's own "api"
+      # container joins that same shared network, "api" resolves to whichever one Docker's embedded
+      # DNS happens to hand back — confirmed live on avos-licensing's own frontend container, which
+      # caused login requests to intermittently land on the wrong backend. "leaf-api" is the alias
+      # this service already registers specifically to be unique host-wide — using it here for the
+      # same-stack call too, not just the edge Caddy's cross-stack one, is what actually avoids the
+      # collision.
+      API_INTERNAL_URL: "https://leaf-api:8443"
+      # Browser-reachable (see lib/config.ts) — GET /api/auth/sso/start sends the browser here
+      # directly, so this must be avos-licensing's real public URL, not an internal address.
+      LICENSING_PUBLIC_URL: ${LICENSING_PUBLIC_URL:?avos-licensing's public URL is required}
+      # The avos-leaf LicensedApplication's id — same value as Licensing__LeafApplicationId above,
+      # just under the name lib/config.ts expects (not secret; it's the OAuth client_id).
+      SSO_CLIENT_ID: ${LICENSING_LEAF_APPLICATION_ID:?The avos-leaf LicensedApplication id from avos-licensing is required}
+      # This app's own public origin — used to build the SSO redirect_uri; must byte-for-byte match
+      # what's registered as this application's redirect URI in avos-licensing.
+      PUBLIC_APP_URL: "https://${DOMAIN:?Domain required}"
+      NODE_ENV: production
+      # Loopback-only, mirroring the api container: the plain-HTTP Next.js process is reachable only
+      # from the Caddy TLS sidecar in this same container (see frontend/docker/Caddyfile), not from
+      # other containers on the Docker network directly.
+      HOSTNAME: "127.0.0.1"
+    networks:
+      default:
+      # See the api service's comment above — reachable from the shared edge Caddy as
+      # leaf-frontend:3443.
+      avos-edge:
+        aliases:
+          - leaf-frontend
+
+networks:
+  default:
+  # Created once on the host (`docker network create avos-edge`), shared by every product's stack
+  # and by the standalone shared-edge Caddy stack that owns host ports 80/443 for the whole server.
+  # This repo doesn't run its own port-80/443-bound Caddy — see DEPLOY.md's "Shared edge Caddy"
+  # section for why, and root Caddyfile's header comment (its routing logic now lives in the shared
+  # edge's Caddyfile instead, unchanged otherwise).
+  avos-edge:
+    external: true
+
+volumes:
+  pgdata:
+  leaffiles:

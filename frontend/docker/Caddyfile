@@ -1,0 +1,23 @@
+# Internal TLS sidecar for the frontend container — same pattern as the backend's own sidecar.
+# Terminates HTTPS on 3443 with a self-signed ("tls internal") certificate and reverse-proxies to
+# the Next.js server on loopback:3200. Trust for this hop comes from the Docker network boundary,
+# not a CA chain.
+#
+# header_up X-Forwarded-Host: pass through whatever the edge Caddy already set (the real public
+# domain) instead of letting this hop's own reverse_proxy default overwrite it with this site
+# block's own Host-matcher value ("frontend:3443") — see avos-licensing's Caddyfiles for the writeup.
+#
+# Both hostnames below are real callers, not redundancy: this stack's own edge/backend dial in as
+# "frontend" (the bare Compose service name), while other AVOS products could dial straight into
+# this sidecar directly, over the shared avos-edge network, using its "leaf-frontend" alias (see
+# docker-compose.prod.yml). Caddy's automatic TLS scopes the certificate — and which SNI it'll even
+# accept a handshake for — to exactly the hostnames listed in a site's address; a caller connecting
+# with an SNI that isn't listed here gets the connection rejected at the TLS layer (a raw "tlsv1
+# alert internal error", not a routing miss) — see the backend sidecar's identical Caddyfile
+# (api:8443, leaf-api:8443) for where this exact fix was already applied.
+frontend:3443, leaf-frontend:3443 {
+	tls internal
+	reverse_proxy localhost:3200 {
+		header_up X-Forwarded-Host {http.request.header.X-Forwarded-Host}
+	}
+}

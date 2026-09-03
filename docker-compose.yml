@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: avos_leaf
+      POSTGRES_USER: avos_leaf
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avos_leaf -d avos_leaf"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: src/Avos.Leaf.Api/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=avos_leaf;Username=avos_leaf;Password=${POSTGRES_PASSWORD:-devpassword}"
+      Jwt__Key: ${JWT_KEY:?JWT signing key required}
+      Jwt__Issuer: avos-leaf
+      Jwt__Audience: avos-leaf-clients
+      Leaf__EncryptionKey: ${LEAF_ENCRYPTION_KEY:?Field encryption key required}
+      Leaf__StoragePath: /data/leaf-files
+      # Where the avos-licensing instance this deployment trusts lives, and which of its
+      # LicensedApplication rows is "avos-leaf" — see IdentityLicensingClient/AuthController.
+      Licensing__BaseUrl: ${LICENSING_BASE_URL:-http://licensing-api:8080}
+      Licensing__LeafApplicationId: ${LICENSING_LEAF_APPLICATION_ID:?The avos-leaf LicensedApplication id from avos-licensing is required}
+      Cors__FrontendOrigin: ${FRONTEND_ORIGIN:-http://localhost:3200}
+      ASPNETCORE_ENVIRONMENT: Development
+    volumes:
+      - leaffiles:/data/leaf-files
+    ports:
+      - "5490:8080"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      API_INTERNAL_URL: "http://api:8080"
+    ports:
+      - "3200:3200"
+
+volumes:
+  pgdata:
+  leaffiles:

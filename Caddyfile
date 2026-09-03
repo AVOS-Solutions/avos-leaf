@@ -1,0 +1,28 @@
+# NOTE: no longer used by docker-compose.prod.yml directly — this repo doesn't run its own
+# port-80/443-bound Caddy (see that file's "avos-edge" network comment). The routing logic below is
+# unchanged in spirit, just relocated: the shared edge Caddy stack's own Caddyfile has an equivalent
+# leaf.avos.solutions block pointing at leaf-frontend instead of frontend. Kept here for
+# reference/local single-product deploys that don't need a shared edge.
+{$DOMAIN} {
+	# The api container has no published port in production (docker-compose.prod.yml) — everything
+	# goes to the frontend, which reaches the api server-side via API_INTERNAL_URL. avos-leaf has no
+	# anonymous /api/public/* surface — every request is proxied to the frontend, whose own /api/*
+	# Next.js routes are the only way anything touches the .NET REST API.
+	#
+	# The upstream is dialed over TLS on its Caddy sidecar port (3443, see frontend/docker/Caddyfile)
+	# rather than the container's plain-HTTP app port, which is loopback-only inside the container
+	# and unreachable from here directly. tls_insecure_skip_verify is safe here: the sidecar's cert
+	# is a self-signed ("tls internal") cert scoped to the Docker network, not something a public CA
+	# chain could validate anyway — trust comes from the network boundary itself.
+	reverse_proxy https://frontend:3443 {
+		# The sidecar's site block is addressed by its Compose service name ("frontend:3443"), which
+		# doubles as a Host-matcher it needs to route correctly — so without this override its own
+		# reverse_proxy default would derive X-Forwarded-Host from ITS view of Host instead of the
+		# real public domain, and Next.js rejects every Server Action when X-Forwarded-Host doesn't
+		# match the browser's Origin header. See avos-licensing's Caddyfile for the full writeup.
+		header_up X-Forwarded-Host {http.request.host}
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}
