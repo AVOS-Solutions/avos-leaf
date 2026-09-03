@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Input, Label, Modal, PageHeader, Select } from "@/components/ui";
+import { toArrayBuffer } from "@/lib/pdfClient";
 import type { DocumentSummary, FolderSummary } from "@/lib/types";
 
 function formatBytes(bytes: number) {
@@ -35,7 +36,9 @@ export function DocumentsClient() {
   const [renameTarget, setRenameTarget] = useState<{ kind: "folder" | "document"; id: string; name: string } | null>(null);
   const [moveTarget, setMoveTarget] = useState<{ kind: "folder" | "document"; id: string; currentFolderId: string | null } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [convertingImages, setConvertingImages] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imagesInputRef = useRef<HTMLInputElement>(null);
 
   const loadFolders = useCallback(async () => {
     const response = await fetch("/api/backend/folders");
@@ -113,6 +116,50 @@ export function DocumentsClient() {
       setError(err instanceof Error ? err.message : "Upload failed.");
     } finally {
       setUploading(false);
+    }
+  }
+
+  /** Builds a new PDF from one or more images (one page per image, fitted to A4 with a margin,
+   *  preserving aspect ratio) and uploads it through the same endpoint a regular PDF upload uses —
+   *  the backend never needs to know this document didn't start life as a PDF. */
+  async function handleImagesToPdf(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    setConvertingImages(true);
+    setError(null);
+    try {
+      const { PDFDocument, PageSizes } = await import("pdf-lib");
+      const doc = await PDFDocument.create();
+      const margin = 36;
+      for (const file of files) {
+        const bytes = await file.arrayBuffer();
+        const isPng = file.type === "image/png";
+        const isJpeg = file.type === "image/jpeg" || file.type === "image/jpg";
+        if (!isPng && !isJpeg) throw new Error(`"${file.name}" isn't a JPEG or PNG image.`);
+        const image = isPng ? await doc.embedPng(bytes) : await doc.embedJpg(bytes);
+        const [pageWidth, pageHeight] = PageSizes.A4;
+        const availableWidth = pageWidth - margin * 2;
+        const availableHeight = pageHeight - margin * 2;
+        const scale = Math.min(availableWidth / image.width, availableHeight / image.height, 1);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        const page = doc.addPage(PageSizes.A4);
+        page.drawImage(image, { x: (pageWidth - width) / 2, y: (pageHeight - height) / 2, width, height });
+      }
+      const pdfBytes = await doc.save();
+      const form = new FormData();
+      const name = files.length === 1 ? files[0].name.replace(/\.[^.]+$/, ".pdf") : "Images.pdf";
+      form.append("file", new Blob([toArrayBuffer(pdfBytes)], { type: "application/pdf" }), name);
+      if (folderId) form.append("folderId", folderId);
+      const response = await fetch("/api/documents/upload", { method: "POST", body: form });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message ?? "Could not create a PDF from these images.");
+      await loadDocuments();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not create a PDF from these images.");
+    } finally {
+      setConvertingImages(false);
     }
   }
 
@@ -213,6 +260,17 @@ export function DocumentsClient() {
                 {uploading ? "Uploading…" : "Upload PDF"}
               </Button>
               <input ref={fileInputRef} type="file" accept="application/pdf" className="hidden" onChange={handleUpload} />
+              <Button variant="secondary" onClick={() => imagesInputRef.current?.click()} disabled={convertingImages}>
+                {convertingImages ? "Converting…" : "Images to PDF…"}
+              </Button>
+              <input
+                ref={imagesInputRef}
+                type="file"
+                accept="image/png,image/jpeg"
+                multiple
+                className="hidden"
+                onChange={handleImagesToPdf}
+              />
             </div>
           )
         }

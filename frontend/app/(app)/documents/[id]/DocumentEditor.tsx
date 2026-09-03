@@ -11,10 +11,24 @@ import { RedactModal } from "./RedactModal";
 import { SignModal } from "./SignModal";
 import { FillFormModal } from "./FillFormModal";
 import { CropModal, ExtractTextModal, MetadataModal, PageNumbersModal, SplitModal, buildAndUpload } from "./ToolModals";
+import { CompareModal, ExportImagesModal, FindRedactModal, HeaderFooterModal, InsertPdfModal } from "./CompetitiveTools";
 
 const MAX_HISTORY = 20;
 
-type SimpleModal = "split" | "pageNumbers" | "metadata" | "crop" | "extractText" | "fillForm" | "sign" | null;
+type SimpleModal =
+  | "split"
+  | "pageNumbers"
+  | "metadata"
+  | "crop"
+  | "extractText"
+  | "fillForm"
+  | "sign"
+  | "findRedact"
+  | "headerFooter"
+  | "insertPdf"
+  | "exportImages"
+  | "compare"
+  | null;
 
 export function DocumentEditor({ documentId }: { documentId: string }) {
   const [docName, setDocName] = useState("");
@@ -448,6 +462,21 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button className="shrink-0" variant="secondary" onClick={() => openTool("extractText")}>
             Extract text…
           </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("insertPdf")}>
+            Insert PDF…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("headerFooter")}>
+            Header &amp; footer…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("findRedact")}>
+            Find &amp; redact…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("exportImages")}>
+            Export as images…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("compare")}>
+            Compare…
+          </Button>
           <Button className="shrink-0" variant="secondary" onClick={() => rotateAll(90)}>
             Rotate all ⟳
           </Button>
@@ -595,6 +624,34 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
       <MetadataModal open={activeModal === "metadata"} onClose={() => setActiveModal(null)} pdfDoc={pdfDoc} onApplied={onToolApplied} />
       <CropModal open={activeModal === "crop"} onClose={() => setActiveModal(null)} pdfDoc={pdfDoc} onApplied={onToolApplied} />
       <ExtractTextModal open={activeModal === "extractText"} onClose={() => setActiveModal(null)} pdfDoc={pdfDoc} docName={docName} />
+      <InsertPdfModal
+        open={activeModal === "insertPdf"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <HeaderFooterModal
+        open={activeModal === "headerFooter"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <FindRedactModal
+        open={activeModal === "findRedact"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <ExportImagesModal
+        open={activeModal === "exportImages"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        pageCount={thumbnails.length}
+      />
+      <CompareModal open={activeModal === "compare"} onClose={() => setActiveModal(null)} pdfDoc={pdfDoc} />
       <SplitModal
         open={activeModal === "split"}
         onClose={() => setActiveModal(null)}
