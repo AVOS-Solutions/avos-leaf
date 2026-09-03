@@ -9,7 +9,7 @@ import { loadPdfJs, toArrayBuffer } from "@/lib/pdfClient";
 /** Parses a page-range string like "1-3, 5, 8-10" (1-indexed, as shown to the user) into a sorted,
  *  de-duplicated array of 0-indexed page numbers, clamped to [0, pageCount). Throws with a message
  *  safe to show the user on anything unparseable, rather than silently producing an empty result. */
-function parsePageRanges(input: string, pageCount: number): number[] {
+export function parsePageRanges(input: string, pageCount: number): number[] {
   const indices = new Set<number>();
   const parts = input.split(",").map((p) => p.trim()).filter(Boolean);
   if (parts.length === 0) throw new Error("Enter at least one page or range, e.g. 1-3, 5.");

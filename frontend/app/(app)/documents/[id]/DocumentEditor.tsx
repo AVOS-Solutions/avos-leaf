@@ -12,6 +12,26 @@ import { SignModal } from "./SignModal";
 import { FillFormModal } from "./FillFormModal";
 import { CropModal, ExtractTextModal, MetadataModal, PageNumbersModal, SplitModal, buildAndUpload } from "./ToolModals";
 import { CompareModal, ExportImagesModal, FindRedactModal, HeaderFooterModal, InsertPdfModal } from "./CompetitiveTools";
+import {
+  BatesNumberingModal,
+  BlackoutPagesModal,
+  CompressModal,
+  ContactSheetModal,
+  DeleteRangeModal,
+  ExtractImagesModal,
+  FlattenFormModal,
+  GrayscaleModal,
+  ImageWatermarkModal,
+  InsertBlankPagesModal,
+  LongImageModal,
+  NUpModal,
+  OddEvenModal,
+  RemoveAnnotationsModal,
+  ReorderPagesModal,
+  ResizePagesModal,
+  RotateRangeModal,
+  SplitToZipModal,
+} from "./CompetitiveTools2";
 
 const MAX_HISTORY = 20;
 
@@ -28,6 +48,24 @@ type SimpleModal =
   | "insertPdf"
   | "exportImages"
   | "compare"
+  | "oddEven"
+  | "flattenForm"
+  | "removeAnnotations"
+  | "nUp"
+  | "compress"
+  | "grayscale"
+  | "imageWatermark"
+  | "bates"
+  | "extractImages"
+  | "rotateRange"
+  | "deleteRange"
+  | "blackout"
+  | "resizePages"
+  | "insertBlankPages"
+  | "reorderPages"
+  | "longImage"
+  | "contactSheet"
+  | "splitToZip"
   | null;
 
 export function DocumentEditor({ documentId }: { documentId: string }) {
@@ -477,6 +515,60 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button className="shrink-0" variant="secondary" onClick={() => openTool("compare")}>
             Compare…
           </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("oddEven")}>
+            Odd/even pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("splitToZip")}>
+            Split to zip…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("nUp")}>
+            N-up…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("contactSheet")}>
+            Contact sheet…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("compress")}>
+            Compress…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("grayscale")}>
+            Grayscale…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("imageWatermark")}>
+            Image stamp…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("bates")}>
+            Bates numbering…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("extractImages")}>
+            Extract images…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("longImage")}>
+            Export as one image…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("flattenForm")}>
+            Flatten form…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("removeAnnotations")}>
+            Remove annotations…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("rotateRange")}>
+            Rotate pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("deleteRange")}>
+            Delete pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("blackout")}>
+            Blackout pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("resizePages")}>
+            Resize pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("insertBlankPages")}>
+            Insert blank pages…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("reorderPages")}>
+            Reorder pages…
+          </Button>
           <Button className="shrink-0" variant="secondary" onClick={() => rotateAll(90)}>
             Rotate all ⟳
           </Button>
@@ -652,6 +744,133 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         pageCount={thumbnails.length}
       />
       <CompareModal open={activeModal === "compare"} onClose={() => setActiveModal(null)} pdfDoc={pdfDoc} />
+      <OddEvenModal
+        open={activeModal === "oddEven"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        folderId={folderId}
+        pageCount={thumbnails.length}
+        onCreated={() => setNotice("Odd/even split complete.")}
+      />
+      <SplitToZipModal
+        open={activeModal === "splitToZip"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        pageCount={thumbnails.length}
+      />
+      <NUpModal
+        open={activeModal === "nUp"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        folderId={folderId}
+        pageCount={thumbnails.length}
+        onCreated={() => setNotice("N-up layout created.")}
+      />
+      <ContactSheetModal
+        open={activeModal === "contactSheet"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        folderId={folderId}
+        pageCount={thumbnails.length}
+        onCreated={() => setNotice("Contact sheet created.")}
+      />
+      <CompressModal
+        open={activeModal === "compress"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <GrayscaleModal
+        open={activeModal === "grayscale"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <ImageWatermarkModal
+        open={activeModal === "imageWatermark"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <BatesNumberingModal
+        open={activeModal === "bates"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <ExtractImagesModal
+        open={activeModal === "extractImages"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+      />
+      <LongImageModal
+        open={activeModal === "longImage"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        pageCount={thumbnails.length}
+      />
+      <FlattenFormModal
+        open={activeModal === "flattenForm"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <RemoveAnnotationsModal
+        open={activeModal === "removeAnnotations"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <RotateRangeModal
+        open={activeModal === "rotateRange"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <DeleteRangeModal
+        open={activeModal === "deleteRange"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <BlackoutPagesModal
+        open={activeModal === "blackout"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <ResizePagesModal
+        open={activeModal === "resizePages"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <InsertBlankPagesModal
+        open={activeModal === "insertBlankPages"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <ReorderPagesModal
+        open={activeModal === "reorderPages"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
       <SplitModal
         open={activeModal === "split"}
         onClose={() => setActiveModal(null)}

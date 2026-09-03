@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Button, Card, Input, Label, Modal, PageHeader, Select } from "@/components/ui";
+import { Button, Card, Input, Label, Modal, PageHeader, Select, Textarea } from "@/components/ui";
 import { toArrayBuffer } from "@/lib/pdfClient";
 import type { DocumentSummary, FolderSummary } from "@/lib/types";
 
@@ -39,6 +39,18 @@ export function DocumentsClient() {
   const [convertingImages, setConvertingImages] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imagesInputRef = useRef<HTMLInputElement>(null);
+
+  const [textPdfOpen, setTextPdfOpen] = useState(false);
+  const [textPdfTitle, setTextPdfTitle] = useState("");
+  const [textPdfBody, setTextPdfBody] = useState("");
+  const [creatingTextPdf, setCreatingTextPdf] = useState(false);
+  const [textPdfError, setTextPdfError] = useState<string | null>(null);
+
+  const [combineOpen, setCombineOpen] = useState(false);
+  const [combineCandidates, setCombineCandidates] = useState<DocumentSummary[]>([]);
+  const [combineSelected, setCombineSelected] = useState<string[]>([]);
+  const [combining, setCombining] = useState(false);
+  const [combineError, setCombineError] = useState<string | null>(null);
 
   const loadFolders = useCallback(async () => {
     const response = await fetch("/api/backend/folders");
@@ -163,6 +175,119 @@ export function DocumentsClient() {
     }
   }
 
+  /** Wraps pasted plain text into a paginated PDF (simple word-wrap against the page's text width,
+   *  same font metrics trick pdf-lib's own docs use) and uploads it like any other new document —
+   *  the missing counterpart to "Extract text" on the editor's own toolbar. */
+  async function createTextPdf(e: React.FormEvent) {
+    e.preventDefault();
+    if (!textPdfBody.trim()) return;
+    setCreatingTextPdf(true);
+    setTextPdfError(null);
+    try {
+      const { PDFDocument, StandardFonts, PageSizes } = await import("pdf-lib");
+      const doc = await PDFDocument.create();
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      const size = 11;
+      const lineHeight = size * 1.4;
+      const margin = 54;
+      const [pageWidth, pageHeight] = PageSizes.A4;
+      const maxWidth = pageWidth - margin * 2;
+
+      const lines: string[] = [];
+      for (const paragraph of textPdfBody.split("\n")) {
+        if (paragraph.trim() === "") {
+          lines.push("");
+          continue;
+        }
+        let current = "";
+        for (const word of paragraph.split(" ")) {
+          const candidate = current ? `${current} ${word}` : word;
+          if (font.widthOfTextAtSize(candidate, size) > maxWidth && current) {
+            lines.push(current);
+            current = word;
+          } else {
+            current = candidate;
+          }
+        }
+        lines.push(current);
+      }
+
+      let page = doc.addPage(PageSizes.A4);
+      let y = pageHeight - margin;
+      for (const line of lines) {
+        if (y < margin) {
+          page = doc.addPage(PageSizes.A4);
+          y = pageHeight - margin;
+        }
+        if (line) page.drawText(line, { x: margin, y, size, font });
+        y -= lineHeight;
+      }
+
+      const bytes = await doc.save();
+      const form = new FormData();
+      const name = `${(textPdfTitle.trim() || "Untitled").replace(/\.pdf$/i, "")}.pdf`;
+      form.append("file", new Blob([toArrayBuffer(bytes)], { type: "application/pdf" }), name);
+      if (folderId) form.append("folderId", folderId);
+      const response = await fetch("/api/documents/upload", { method: "POST", body: form });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message ?? "Could not create that document.");
+      setTextPdfOpen(false);
+      setTextPdfTitle("");
+      setTextPdfBody("");
+      await loadDocuments();
+    } catch (err) {
+      setTextPdfError(err instanceof Error ? err.message : "Could not create that document.");
+    } finally {
+      setCreatingTextPdf(false);
+    }
+  }
+
+  /** Merge only ever accepted an upload from outside the app (DocumentEditor's mergeFile) — this
+   *  covers combining documents that already live in this account's library, fetching each one's
+   *  current content through the same endpoint the editor itself reads from. */
+  async function openCombine() {
+    setCombineError(null);
+    setCombineSelected([]);
+    setCombineOpen(true);
+    const response = await fetch("/api/backend/documents");
+    if (response.ok) setCombineCandidates(await response.json());
+  }
+
+  function toggleCombine(id: string) {
+    setCombineSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  async function runCombine() {
+    if (combineSelected.length < 2) return;
+    setCombining(true);
+    setCombineError(null);
+    try {
+      const { PDFDocument } = await import("pdf-lib");
+      const merged = await PDFDocument.create();
+      for (const id of combineSelected) {
+        const response = await fetch(`/api/documents/${id}/content`);
+        if (!response.ok) throw new Error("Could not read one of the selected documents.");
+        const bytes = await response.arrayBuffer();
+        const source = await PDFDocument.load(bytes);
+        const pages = await merged.copyPages(source, source.getPageIndices());
+        pages.forEach((page) => merged.addPage(page));
+      }
+      const mergedBytes = await merged.save();
+      const form = new FormData();
+      form.append("file", new Blob([toArrayBuffer(mergedBytes)], { type: "application/pdf" }), "Combined.pdf");
+      if (folderId) form.append("folderId", folderId);
+      const response = await fetch("/api/documents/upload", { method: "POST", body: form });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.message ?? "Could not combine these documents.");
+      setCombineOpen(false);
+      await loadDocuments();
+    } catch (err) {
+      setCombineError(err instanceof Error ? err.message : "Could not combine these documents.");
+    } finally {
+      setCombining(false);
+    }
+  }
+
   async function createFolder(e: React.FormEvent) {
     e.preventDefault();
     const response = await fetch("/api/backend/folders", {
@@ -271,6 +396,12 @@ export function DocumentsClient() {
                 className="hidden"
                 onChange={handleImagesToPdf}
               />
+              <Button variant="secondary" onClick={() => setTextPdfOpen(true)}>
+                New PDF from text…
+              </Button>
+              <Button variant="secondary" onClick={openCombine}>
+                Combine documents…
+              </Button>
             </div>
           )
         }
@@ -429,6 +560,65 @@ export function DocumentsClient() {
                 </option>
               ))}
           </Select>
+        </div>
+      </Modal>
+
+      <Modal open={textPdfOpen} onClose={() => setTextPdfOpen(false)} title="New PDF from text">
+        <form onSubmit={createTextPdf} className="space-y-4">
+          <div>
+            <Label htmlFor="textpdf-title">Title</Label>
+            <Input id="textpdf-title" placeholder="Untitled" value={textPdfTitle} onChange={(e) => setTextPdfTitle(e.target.value)} />
+          </div>
+          <div>
+            <Label htmlFor="textpdf-body">Text</Label>
+            <Textarea
+              id="textpdf-body"
+              rows={12}
+              required
+              autoFocus
+              placeholder="Paste or type the text for this document…"
+              value={textPdfBody}
+              onChange={(e) => setTextPdfBody(e.target.value)}
+            />
+          </div>
+          {textPdfError && <p className="text-sm text-brass">{textPdfError}</p>}
+          <Button type="submit" className="w-full" disabled={creatingTextPdf}>
+            {creatingTextPdf ? "Creating…" : "Create PDF"}
+          </Button>
+        </form>
+      </Modal>
+
+      <Modal open={combineOpen} onClose={() => setCombineOpen(false)} title="Combine documents">
+        <div className="space-y-4">
+          <p className="text-xs text-slate">
+            Pick two or more documents from your library to merge into one new PDF, in the order you select
+            them. The originals are untouched.
+          </p>
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-line p-2">
+            {combineCandidates.length === 0 ? (
+              <p className="text-sm text-slate">No documents available.</p>
+            ) : (
+              combineCandidates.map((doc) => {
+                const position = combineSelected.indexOf(doc.id);
+                return (
+                  <label key={doc.id} className="flex items-center gap-2 text-sm text-ink">
+                    <input type="checkbox" checked={position !== -1} onChange={() => toggleCombine(doc.id)} />
+                    <span className="min-w-0 flex-1 truncate">{doc.name}</span>
+                    {position !== -1 && <span className="mono text-xs text-slate">#{position + 1}</span>}
+                  </label>
+                );
+              })
+            )}
+          </div>
+          {combineError && <p className="text-sm text-brass">{combineError}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setCombineOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={runCombine} disabled={combining || combineSelected.length < 2}>
+              {combining ? "Combining…" : `Combine ${combineSelected.length || ""}`.trim()}
+            </Button>
+          </div>
         </div>
       </Modal>
     </>
