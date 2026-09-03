@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Input, Label, Modal, PageHeader, Select, Textarea } from "@/components/ui";
 import { toArrayBuffer } from "@/lib/pdfClient";
 import type { DocumentSummary, FolderSummary } from "@/lib/types";
-import { CsvToPdfModal, MarkdownToPdfModal, MergeMultipleModal } from "./ListTools";
+import { BatchRenameModal, CsvToPdfModal, MarkdownToPdfModal, MergeMultipleModal } from "./ListTools";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -64,7 +64,9 @@ export function DocumentsClient() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkWorking, setBulkWorking] = useState(false);
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
+  const [batchRenameOpen, setBatchRenameOpen] = useState(false);
   const [zipping, setZipping] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
 
   const loadFolders = useCallback(async () => {
     const response = await fetch("/api/backend/folders");
@@ -384,13 +386,21 @@ export function DocumentsClient() {
     await loadDocuments();
   }
 
-  const sortedDocuments = [...documents].sort((a, b) => {
-    let cmp = 0;
-    if (sortBy === "name") cmp = a.name.localeCompare(b.name);
-    else if (sortBy === "size") cmp = a.sizeBytes - b.sizeBytes;
-    else cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-    return sortDir === "asc" ? cmp : -cmp;
-  });
+  const sortedDocuments = [...documents]
+    .filter((d) => d.name.toLowerCase().includes(filterQuery.trim().toLowerCase()))
+    .sort((a, b) => {
+      let cmp = 0;
+      if (sortBy === "name") cmp = a.name.localeCompare(b.name);
+      else if (sortBy === "size") cmp = a.sizeBytes - b.sizeBytes;
+      else cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+
+  const totalSizeBytes = documents.reduce((sum, d) => sum + d.sizeBytes, 0);
+
+  function selectAllVisible() {
+    setBulkSelected(new Set(sortedDocuments.map((d) => d.id)));
+  }
 
   function toggleBulkMode() {
     setBulkMode((prev) => !prev);
@@ -410,6 +420,28 @@ export function DocumentsClient() {
     setBulkWorking(true);
     try {
       await Promise.all([...bulkSelected].map((id) => fetch(`/api/backend/documents/${id}`, { method: "DELETE" })));
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function bulkDuplicate() {
+    setBulkWorking(true);
+    try {
+      await Promise.all([...bulkSelected].map((id) => fetch(`/api/backend/documents/${id}/duplicate`, { method: "POST" })));
+      setBulkSelected(new Set());
+      await loadDocuments();
+    } finally {
+      setBulkWorking(false);
+    }
+  }
+
+  async function bulkRestore() {
+    setBulkWorking(true);
+    try {
+      await Promise.all([...bulkSelected].map((id) => fetch(`/api/backend/documents/${id}/restore`, { method: "POST" })));
       setBulkSelected(new Set());
       await loadDocuments();
     } finally {
@@ -645,6 +677,19 @@ export function DocumentsClient() {
         </div>
       )}
 
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <Input
+          className="max-w-xs"
+          placeholder="Filter by name…"
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+        />
+        <span className="text-xs text-slate">
+          {documents.length} document{documents.length === 1 ? "" : "s"}
+          {subfolders.length > 0 ? ` · ${subfolders.length} folder${subfolders.length === 1 ? "" : "s"}` : ""} · {formatBytes(totalSizeBytes)}
+        </span>
+      </div>
+
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-2 text-slate">
           <span>Sort by:</span>
@@ -683,10 +728,21 @@ export function DocumentsClient() {
       {bulkMode && (
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-md bg-paper-dim p-2 text-xs">
           <span className="text-slate">{bulkSelected.size} selected</span>
+          <Button variant="secondary" onClick={selectAllVisible} disabled={sortedDocuments.length === 0}>
+            Select all
+          </Button>
+          <Button variant="secondary" onClick={() => setBulkSelected(new Set())} disabled={bulkSelected.size === 0}>
+            Select none
+          </Button>
           {view === "trash" ? (
-            <Button variant="danger" onClick={bulkDeleteForever} disabled={bulkSelected.size === 0 || bulkWorking}>
-              Delete forever
-            </Button>
+            <>
+              <Button variant="secondary" onClick={bulkRestore} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Restore
+              </Button>
+              <Button variant="danger" onClick={bulkDeleteForever} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Delete forever
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="secondary" onClick={() => setBulkMoveOpen(true)} disabled={bulkSelected.size === 0}>
@@ -700,6 +756,12 @@ export function DocumentsClient() {
               </Button>
               <Button variant="secondary" onClick={() => bulkStar(false)} disabled={bulkSelected.size === 0 || bulkWorking}>
                 Unstar
+              </Button>
+              <Button variant="secondary" onClick={bulkDuplicate} disabled={bulkSelected.size === 0 || bulkWorking}>
+                Duplicate
+              </Button>
+              <Button variant="secondary" onClick={() => setBatchRenameOpen(true)} disabled={bulkSelected.size === 0}>
+                Batch rename…
               </Button>
               <Button
                 variant="secondary"
@@ -866,6 +928,15 @@ export function DocumentsClient() {
       </Modal>
 
       <MergeMultipleModal open={mergeMultipleOpen} onClose={() => setMergeMultipleOpen(false)} folderId={folderId} onCreated={loadDocuments} />
+      <BatchRenameModal
+        open={batchRenameOpen}
+        onClose={() => setBatchRenameOpen(false)}
+        documents={sortedDocuments.filter((d) => bulkSelected.has(d.id))}
+        onRenamed={() => {
+          setBulkSelected(new Set());
+          loadDocuments();
+        }}
+      />
       <MarkdownToPdfModal open={markdownPdfOpen} onClose={() => setMarkdownPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />
       <CsvToPdfModal open={csvPdfOpen} onClose={() => setCsvPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />
 

@@ -396,3 +396,110 @@ export function CsvToPdfModal({
     </Modal>
   );
 }
+
+// -------------------------------------------------------------------------------------------
+// Batch rename: renames every selected document at once using a pattern with {n} (a counter,
+// zero-padded to the width you choose) and {name} (the original name, minus its .pdf extension) —
+// applied in the order the documents are currently sorted/selected, the way a batch-rename tool in
+// a file manager works.
+
+export function BatchRenameModal({
+  open,
+  onClose,
+  documents,
+  onRenamed,
+}: {
+  open: boolean;
+  onClose: () => void;
+  documents: { id: string; name: string }[];
+  onRenamed: () => void;
+}) {
+  const [pattern, setPattern] = useState("{name}");
+  const [startAt, setStartAt] = useState(1);
+  const [digits, setDigits] = useState(2);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the form each time the modal (re)opens
+      setPattern("{name}");
+      setStartAt(1);
+      setError(null);
+    }
+  }, [open]);
+
+  function preview(index: number) {
+    const original = documents[index]?.name.replace(/\.pdf$/i, "") ?? "";
+    const counter = String(startAt + index).padStart(Math.max(1, digits), "0");
+    const name = pattern.replace(/\{n\}/g, counter).replace(/\{name\}/g, original);
+    return name.toLowerCase().endsWith(".pdf") ? name : `${name}.pdf`;
+  }
+
+  async function apply() {
+    if (documents.length === 0) return;
+    setWorking(true);
+    setError(null);
+    try {
+      for (let i = 0; i < documents.length; i++) {
+        const response = await fetch(`/api/backend/documents/${documents[i].id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: preview(i) }),
+        });
+        if (!response.ok) throw new Error(`Could not rename "${documents[i].name}".`);
+      }
+      onRenamed();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not rename these documents.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Batch rename">
+      <div className="space-y-4">
+        <p className="text-xs text-slate">
+          Renames all {documents.length} selected document{documents.length === 1 ? "" : "s"}. Use{" "}
+          <code className="mono">{"{n}"}</code> for a counter and <code className="mono">{"{name}"}</code> for the
+          original name.
+        </p>
+        <div>
+          <Label htmlFor="rename-pattern">Pattern</Label>
+          <Input id="rename-pattern" placeholder="Invoice {n} — {name}" value={pattern} onChange={(e) => setPattern(e.target.value)} />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <Label htmlFor="rename-start">Counter starts at</Label>
+            <Input id="rename-start" type="number" min={0} value={startAt} onChange={(e) => setStartAt(Number(e.target.value))} />
+          </div>
+          <div>
+            <Label htmlFor="rename-digits">Counter digits</Label>
+            <Input id="rename-digits" type="number" min={1} max={6} value={digits} onChange={(e) => setDigits(Number(e.target.value))} />
+          </div>
+        </div>
+        {documents.length > 0 && (
+          <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-md border border-line p-2 text-xs text-slate">
+            {documents.slice(0, 8).map((_, i) => (
+              <p key={i} className="mono truncate">
+                {preview(i)}
+              </p>
+            ))}
+            {documents.length > 8 && <p>…and {documents.length - 8} more</p>}
+          </div>
+        )}
+        {error && <p className="text-sm text-brass">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button onClick={apply} disabled={working || documents.length === 0}>
+            {working ? "Renaming…" : "Rename all"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}

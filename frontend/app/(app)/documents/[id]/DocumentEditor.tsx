@@ -45,6 +45,14 @@ import {
   RemoveLinksModal,
   VisualCompareModal,
 } from "./CompetitiveTools3";
+import {
+  DocumentStatsModal,
+  ExportBookmarksModal,
+  ExtractCommentsModal,
+  InsertTocPageModal,
+  RemoveBookmarksModal,
+  SplitByBookmarksModal,
+} from "./CompetitiveTools4";
 
 const MAX_HISTORY = 20;
 
@@ -90,6 +98,12 @@ type SimpleModal =
   | "addLink"
   | "removeLinks"
   | "visualCompare"
+  | "splitByBookmarks"
+  | "insertToc"
+  | "exportBookmarks"
+  | "removeBookmarks"
+  | "extractComments"
+  | "documentStats"
   | null;
 
 export function DocumentEditor({ documentId }: { documentId: string }) {
@@ -128,6 +142,8 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<number[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [matchCursor, setMatchCursor] = useState(0);
+  const [copyingPage, setCopyingPage] = useState<number | null>(null);
 
   const [jumpValue, setJumpValue] = useState("");
   const [thumbSize, setThumbSize] = useState<"small" | "medium" | "large">("medium");
@@ -474,9 +490,18 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         if (text.includes(query)) matches.push(i - 1);
       }
       setSearchResults(matches);
+      setMatchCursor(0);
+      if (matches.length > 0) jumpToPage(matches[0]);
     } finally {
       setSearching(false);
     }
+  }
+
+  function stepMatch(delta: 1 | -1) {
+    if (!searchResults || searchResults.length === 0) return;
+    const next = (matchCursor + delta + searchResults.length) % searchResults.length;
+    setMatchCursor(next);
+    jumpToPage(searchResults[next]);
   }
 
   function jumpToPage(index: number) {
@@ -529,6 +554,42 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
     const blob = new Blob([toArrayBuffer(bytes)], { type: "application/pdf" });
     const url = URL.createObjectURL(blob);
     window.open(url, "_blank");
+  }
+
+  function dateStamp() {
+    withDoc(async (doc) => {
+      const font = await doc.embedFont(StandardFonts.Helvetica);
+      const label = new Date().toLocaleDateString();
+      const size = 9;
+      const margin = 20;
+      for (const page of doc.getPages()) {
+        const { width } = page.getSize();
+        const textWidth = font.widthOfTextAtSize(label, size);
+        page.drawText(label, { x: width - margin - textWidth, y: margin, size, font, color: rgb(0.4, 0.4, 0.4) });
+      }
+    });
+  }
+
+  /** Renders the page fresh (not from the small on-screen thumbnail) so what lands on the clipboard
+   *  is reasonably sharp, then hands it to the async Clipboard API — which some browsers/contexts
+   *  (non-HTTPS, older Safari, a denied permission) don't support for images, so a failure here is
+   *  reported rather than silently swallowed. */
+  async function copyPageImage(index: number) {
+    if (!pdfDoc) return;
+    setCopyingPage(index);
+    try {
+      const bytes = await pdfDoc.save();
+      const { canvas } = await renderPageToCanvas(bytes, index + 1, 2);
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not render this page."))), "image/png");
+      });
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+      setNotice(`Page ${index + 1} copied to clipboard as an image.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not copy this page — your browser may not support copying images.");
+    } finally {
+      setCopyingPage(null);
+    }
   }
 
   function reversePages() {
@@ -783,6 +844,27 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button className="shrink-0" variant="secondary" onClick={() => openTool("visualCompare")}>
             Visual compare…
           </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("splitByBookmarks")}>
+            Split by bookmarks…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("insertToc")}>
+            Insert TOC page…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("exportBookmarks")}>
+            Export bookmarks…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("removeBookmarks")}>
+            Remove bookmarks…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("extractComments")}>
+            Extract comments…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("documentStats")}>
+            Document stats…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={dateStamp}>
+            Date stamp
+          </Button>
           <Button className="shrink-0" variant="secondary" onClick={reversePages}>
             Reverse pages
           </Button>
@@ -797,6 +879,12 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         {selectMode && (
           <div className="mt-3 flex flex-wrap items-center gap-2 rounded-md bg-paper-dim p-2">
             <span className="text-xs text-slate">{selected.size} selected</span>
+            <Button variant="secondary" onClick={() => setSelected(new Set(thumbnails.map((_, i) => i)))}>
+              Select all
+            </Button>
+            <Button variant="secondary" onClick={() => setSelected(new Set())} disabled={selected.size === 0}>
+              Select none
+            </Button>
             <Button variant="secondary" onClick={extractSelected} disabled={selected.size === 0}>
               Extract to new document
             </Button>
@@ -816,6 +904,19 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button type="submit" variant="secondary" disabled={searching}>
             {searching ? "Searching…" : "Search"}
           </Button>
+          {searchResults && searchResults.length > 0 && (
+            <span className="flex items-center gap-1 text-xs text-slate">
+              <button type="button" className="hover:text-ink" onClick={() => stepMatch(-1)}>
+                ‹ prev
+              </button>
+              <span>
+                match {matchCursor + 1} / {searchResults.length}
+              </span>
+              <button type="button" className="hover:text-ink" onClick={() => stepMatch(1)}>
+                next ›
+              </button>
+            </span>
+          )}
           {searchResults && (
             <span className="text-xs text-slate">
               {searchResults.length === 0
@@ -937,6 +1038,14 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
                 </button>
                 <button className="mono text-xs text-paper hover:text-signal" title="Redact" onClick={() => openRedact(index)}>
                   ▮
+                </button>
+                <button
+                  className="mono text-xs text-paper hover:text-signal disabled:opacity-50"
+                  title="Copy page as image"
+                  disabled={copyingPage === index}
+                  onClick={() => copyPageImage(index)}
+                >
+                  ⧈
                 </button>
                 <button className="mono text-xs text-paper hover:text-brass" title="Delete page" onClick={() => deletePage(index)}>
                   ✕
@@ -1214,6 +1323,45 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
       />
       <VisualCompareModal
         open={activeModal === "visualCompare"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+      />
+      <SplitByBookmarksModal
+        open={activeModal === "splitByBookmarks"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+        folderId={folderId}
+        pageCount={thumbnails.length}
+        onCreated={() => setNotice("Split by bookmarks complete.")}
+      />
+      <InsertTocPageModal
+        open={activeModal === "insertToc"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <ExportBookmarksModal
+        open={activeModal === "exportBookmarks"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+      />
+      <RemoveBookmarksModal
+        open={activeModal === "removeBookmarks"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <ExtractCommentsModal
+        open={activeModal === "extractComments"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        docName={docName}
+      />
+      <DocumentStatsModal
+        open={activeModal === "documentStats"}
         onClose={() => setActiveModal(null)}
         pdfDoc={pdfDoc}
         pageCount={thumbnails.length}
