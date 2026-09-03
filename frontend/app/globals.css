@@ -86,3 +86,13 @@ button:not(:disabled) {
   outline: 2px solid var(--signal);
   outline-offset: 2px;
 }
+
+/* Every per-page hover toolbar (rotate/annotate/redact/delete, ...) in the document editor is
+   opacity-0 until `group-hover:opacity-100` — correct for a mouse, but a touch device never fires
+   `:hover` at all, so those controls would otherwise be permanently unreachable on a phone/tablet.
+   Same fix as avos-quill's editor toolbar. */
+@media (hover: none) {
+  .group-hover\:opacity-100 {
+    opacity: 1 !important;
+  }
+}

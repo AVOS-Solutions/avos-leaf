@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Sans, IBM_Plex_Mono, Fragment_Mono } from "next/font/google";
 import { ToastListener } from "@/components/ToastListener";
 import "./globals.css";
@@ -25,6 +25,12 @@ const fragmentMono = Fragment_Mono({
 export const metadata: Metadata = {
   title: "AVOS Leaf",
   description: "A feature-rich PDF editor for AVOS — view, merge, split, annotate, and fill PDFs.",
+};
+
+export const viewport: Viewport = {
+  themeColor: "#161225",
+  width: "device-width",
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

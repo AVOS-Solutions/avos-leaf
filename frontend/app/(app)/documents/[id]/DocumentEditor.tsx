@@ -416,39 +416,42 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" onClick={() => openTool("split")}>
+        {/* A single scrollable row rather than flex-wrap: with 11 buttons this would otherwise wrap
+            into 4-5 stacked rows on a phone, pushing the actual page thumbnails well below the
+            fold. Same tradeoff avos-quill's ribbon toolbar made for its own tab strip. */}
+        <div className="-mx-4 flex items-center gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0">
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("split")}>
             Split…
           </Button>
-          <Button variant="secondary" onClick={() => mergeInputRef.current?.click()}>
+          <Button className="shrink-0" variant="secondary" onClick={() => mergeInputRef.current?.click()}>
             Merge PDF…
           </Button>
           <input ref={mergeInputRef} type="file" accept="application/pdf" className="hidden" onChange={mergeFile} />
-          <Button variant="secondary" onClick={() => openTool("fillForm")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("fillForm")}>
             Fill form…
           </Button>
-          <Button variant="secondary" onClick={() => openTool("sign")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("sign")}>
             Sign…
           </Button>
-          <Button variant="secondary" onClick={addWatermark}>
+          <Button className="shrink-0" variant="secondary" onClick={addWatermark}>
             Watermark…
           </Button>
-          <Button variant="secondary" onClick={() => openTool("pageNumbers")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("pageNumbers")}>
             Page numbers…
           </Button>
-          <Button variant="secondary" onClick={() => openTool("crop")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("crop")}>
             Crop…
           </Button>
-          <Button variant="secondary" onClick={() => openTool("metadata")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("metadata")}>
             Properties…
           </Button>
-          <Button variant="secondary" onClick={() => openTool("extractText")}>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("extractText")}>
             Extract text…
           </Button>
-          <Button variant="secondary" onClick={() => rotateAll(90)}>
+          <Button className="shrink-0" variant="secondary" onClick={() => rotateAll(90)}>
             Rotate all ⟳
           </Button>
-          <Button variant={selectMode ? "primary" : "secondary"} onClick={toggleSelectMode}>
+          <Button className="shrink-0" variant={selectMode ? "primary" : "secondary"} onClick={toggleSelectMode}>
             {selectMode ? "Cancel select" : "Select pages…"}
           </Button>
         </div>

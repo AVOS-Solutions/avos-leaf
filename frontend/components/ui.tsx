@@ -160,7 +160,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 px-4" onClick={onClose}>
-      <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <Card className="max-h-[90vh] w-full max-w-md overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg">{title}</h2>
           <button className="mono text-xs text-slate transition-colors hover:text-ink" onClick={onClose} aria-label="Close">

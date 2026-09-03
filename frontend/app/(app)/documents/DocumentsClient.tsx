@@ -253,11 +253,11 @@ export function DocumentsClient() {
       ) : (
         <div className="space-y-2">
           {subfolders.map((folder) => (
-            <Card key={folder.id} className="flex items-center justify-between gap-4 py-3">
-              <button className="flex-1 text-left" onClick={() => goTo({ folder: folder.id })}>
+            <Card key={folder.id} className="flex flex-col items-start gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <button className="text-left sm:flex-1" onClick={() => goTo({ folder: folder.id })}>
                 📁 {folder.name}
               </button>
-              <div className="flex gap-3 text-xs text-slate">
+              <div className="flex flex-wrap gap-3 text-xs text-slate">
                 <button className="hover:text-ink" onClick={() => setRenameTarget({ kind: "folder", id: folder.id, name: folder.name })}>
                   Rename
                 </button>
@@ -278,8 +278,8 @@ export function DocumentsClient() {
           )}
 
           {documents.map((doc) => (
-            <Card key={doc.id} className="flex items-center justify-between gap-4 py-3">
-              <div className="min-w-0 flex-1">
+            <Card key={doc.id} className="flex flex-col items-start gap-2 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+              <div className="min-w-0 sm:flex-1">
                 {view === "trash" ? (
                   <span className="block truncate text-ink-soft">{doc.name}</span>
                 ) : (
@@ -291,7 +291,7 @@ export function DocumentsClient() {
                   {formatBytes(doc.sizeBytes)} · {doc.pageCount || "?"} pages
                 </span>
               </div>
-              <div className="flex shrink-0 gap-3 text-xs text-slate">
+              <div className="flex flex-wrap gap-3 text-xs text-slate sm:shrink-0">
                 {view === "trash" ? (
                   <>
                     <button className="hover:text-ink" onClick={() => restoreDocument(doc.id)}>

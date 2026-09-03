@@ -34,7 +34,7 @@ function ToastListenerInner() {
   if (!toast) return null;
 
   return (
-    <div className="no-print fixed bottom-6 right-6 z-[100]">
+    <div className="no-print fixed inset-x-4 bottom-6 z-[100] sm:inset-x-auto sm:right-6">
       <div
         role="status"
         className={`rounded-lg border px-4 py-3 text-sm shadow-lg ${
