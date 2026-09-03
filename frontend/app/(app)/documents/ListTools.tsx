@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Button, Input, Label, Modal, Textarea } from "@/components/ui";
-import { toArrayBuffer } from "@/lib/pdfClient";
+import { renderPageToCanvas, toArrayBuffer } from "@/lib/pdfClient";
+import { extractTextRuns } from "@/lib/pdfContentStream";
 
 async function uploadPdf(bytes: Uint8Array, name: string, folderId: string | null) {
   const form = new FormData();
@@ -497,6 +498,160 @@ export function BatchRenameModal({
           </Button>
           <Button onClick={apply} disabled={working || documents.length === 0}>
             {working ? "Renaming…" : "Rename all"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// -------------------------------------------------------------------------------------------
+// Batch redact: runs the editor's own Find & Redact (round 2) across every selected document at
+// once instead of one at a time — a real compliance/legal-review gap even Acrobat doesn't close
+// natively (its batch sequences don't include redaction). Each match is still rasterized exactly
+// like the single-document tool, and results land as new "(redacted)" copies so nothing is silently
+// overwritten.
+
+type BatchRedactResult = { name: string; matchCount: number; created?: { id: string; name: string } };
+
+export function BatchRedactModal({
+  open,
+  onClose,
+  documents,
+  folderId,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  documents: { id: string; name: string }[];
+  folderId: string | null;
+  onCreated: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [working, setWorking] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [results, setResults] = useState<BatchRedactResult[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- resetting the form each time the modal (re)opens
+      setQuery("");
+      setResults(null);
+      setError(null);
+      setProgress(0);
+    }
+  }, [open]);
+
+  async function run() {
+    if (!query.trim() || documents.length === 0) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const { PDFDocument } = await import("pdf-lib");
+      const needle = query.trim().toLowerCase();
+      const out: BatchRedactResult[] = [];
+      for (const doc of documents) {
+        const response = await fetch(`/api/documents/${doc.id}/content`);
+        if (!response.ok) {
+          out.push({ name: doc.name, matchCount: 0 });
+          setProgress((p) => p + 1);
+          continue;
+        }
+        const bytes = await response.arrayBuffer();
+        const pdf = await PDFDocument.load(bytes);
+        const matches: { pageIndex: number; box: { x: number; y: number; width: number; height: number } }[] = [];
+        for (let i = 0; i < pdf.getPageCount(); i++) {
+          const runs = await extractTextRuns(pdf.getPage(i));
+          for (const run of runs) {
+            if (run.text && run.text.toLowerCase().includes(needle)) matches.push({ pageIndex: i, box: run.box });
+          }
+        }
+        if (matches.length === 0) {
+          out.push({ name: doc.name, matchCount: 0 });
+          setProgress((p) => p + 1);
+          continue;
+        }
+        const byPage = new Map<number, typeof matches>();
+        matches.forEach((m) => {
+          if (!byPage.has(m.pageIndex)) byPage.set(m.pageIndex, []);
+          byPage.get(m.pageIndex)!.push(m);
+        });
+        for (const [pageIndex, pageMatches] of byPage) {
+          const page = pdf.getPage(pageIndex);
+          const pdfW = page.getWidth();
+          const pdfH = page.getHeight();
+          const pdfBytes = await pdf.save();
+          const { canvas } = await renderPageToCanvas(pdfBytes, pageIndex + 1, 2);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) continue;
+          ctx.fillStyle = "#000000";
+          for (const m of pageMatches) {
+            ctx.fillRect(m.box.x * 2, canvas.height - (m.box.y + m.box.height) * 2, m.box.width * 2, m.box.height * 2);
+          }
+          const pngBytes = await new Promise<Uint8Array>((resolve, reject) => {
+            canvas.toBlob(async (blob) => {
+              if (!blob) return reject(new Error("Could not export a redacted page."));
+              resolve(new Uint8Array(await blob.arrayBuffer()));
+            }, "image/png");
+          });
+          const image = await pdf.embedPng(pngBytes);
+          pdf.removePage(pageIndex);
+          const newPage = pdf.insertPage(pageIndex, [pdfW, pdfH]);
+          newPage.drawImage(image, { x: 0, y: 0, width: pdfW, height: pdfH });
+        }
+        const finalBytes = await pdf.save();
+        const created = await uploadPdf(finalBytes, `${doc.name.replace(/\.pdf$/i, "")} (redacted).pdf`, folderId);
+        out.push({ name: doc.name, matchCount: matches.length, created });
+        setProgress((p) => p + 1);
+      }
+      setResults(out);
+      if (out.some((r) => r.created)) onCreated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not batch-redact these documents.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal open={open} onClose={onClose} title="Batch redact">
+      <div className="space-y-4">
+        <p className="text-xs text-slate">
+          Finds and redacts every occurrence of a phrase across all {documents.length} selected document
+          {documents.length === 1 ? "" : "s"}. Each affected page is flattened to an image, same as the editor&apos;s
+          own Find & Redact. Results are created as new &quot;(redacted)&quot; copies — nothing is overwritten.
+        </p>
+        {!results && (
+          <div className="flex gap-2">
+            <Input placeholder="Text to find and redact…" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <Button onClick={run} disabled={working || !query.trim() || documents.length === 0}>
+              {working ? `Working ${progress}/${documents.length}…` : "Run"}
+            </Button>
+          </div>
+        )}
+        {results && (
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-line p-2 text-sm">
+            {results.map((r, i) => (
+              <div key={i} className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate">{r.name}</span>
+                <span className="shrink-0 text-xs text-slate">
+                  {r.matchCount === 0
+                    ? "no matches"
+                    : r.created && (
+                        <a className="text-signal-dim underline" href={`/documents/${r.created.id}`}>
+                          {r.matchCount} redacted →
+                        </a>
+                      )}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {error && <p className="text-sm text-brass">{error}</p>}
+        <div className="flex justify-end">
+          <Button variant="secondary" onClick={onClose}>
+            {results ? "Done" : "Cancel"}
           </Button>
         </div>
       </div>

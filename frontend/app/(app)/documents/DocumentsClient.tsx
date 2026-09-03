@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Card, Input, Label, Modal, PageHeader, Select, Textarea } from "@/components/ui";
 import { toArrayBuffer } from "@/lib/pdfClient";
 import type { DocumentSummary, FolderSummary } from "@/lib/types";
-import { BatchRenameModal, CsvToPdfModal, MarkdownToPdfModal, MergeMultipleModal } from "./ListTools";
+import { BatchRedactModal, BatchRenameModal, CsvToPdfModal, MarkdownToPdfModal, MergeMultipleModal } from "./ListTools";
 
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -65,6 +65,7 @@ export function DocumentsClient() {
   const [bulkWorking, setBulkWorking] = useState(false);
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false);
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
+  const [batchRedactOpen, setBatchRedactOpen] = useState(false);
   const [zipping, setZipping] = useState(false);
   const [filterQuery, setFilterQuery] = useState("");
 
@@ -763,6 +764,9 @@ export function DocumentsClient() {
               <Button variant="secondary" onClick={() => setBatchRenameOpen(true)} disabled={bulkSelected.size === 0}>
                 Batch rename…
               </Button>
+              <Button variant="secondary" onClick={() => setBatchRedactOpen(true)} disabled={bulkSelected.size === 0}>
+                Batch redact…
+              </Button>
               <Button
                 variant="secondary"
                 onClick={() => downloadDocumentsAsZip([...bulkSelected], "documents.zip")}
@@ -936,6 +940,13 @@ export function DocumentsClient() {
           setBulkSelected(new Set());
           loadDocuments();
         }}
+      />
+      <BatchRedactModal
+        open={batchRedactOpen}
+        onClose={() => setBatchRedactOpen(false)}
+        documents={sortedDocuments.filter((d) => bulkSelected.has(d.id))}
+        folderId={folderId}
+        onCreated={loadDocuments}
       />
       <MarkdownToPdfModal open={markdownPdfOpen} onClose={() => setMarkdownPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />
       <CsvToPdfModal open={csvPdfOpen} onClose={() => setCsvPdfOpen(false)} folderId={folderId} onCreated={loadDocuments} />

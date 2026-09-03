@@ -53,6 +53,14 @@ import {
   RemoveBookmarksModal,
   SplitByBookmarksModal,
 } from "./CompetitiveTools4";
+import {
+  AccessibilityCheckModal,
+  AttachFileModal,
+  ManageAttachmentsModal,
+  MeasureToolModal,
+  PrepareFormModal,
+  RemoveJavaScriptModal,
+} from "./CompetitiveTools5";
 
 const MAX_HISTORY = 20;
 
@@ -104,6 +112,12 @@ type SimpleModal =
   | "removeBookmarks"
   | "extractComments"
   | "documentStats"
+  | "prepareForm"
+  | "attachFile"
+  | "manageAttachments"
+  | "accessibilityCheck"
+  | "removeJavaScript"
+  | "measure"
   | null;
 
 export function DocumentEditor({ documentId }: { documentId: string }) {
@@ -865,6 +879,24 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
           <Button className="shrink-0" variant="secondary" onClick={dateStamp}>
             Date stamp
           </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("prepareForm")}>
+            Prepare form…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("attachFile")}>
+            Attach file…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("manageAttachments")}>
+            Manage attachments…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("accessibilityCheck")}>
+            Accessibility check…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("removeJavaScript")}>
+            Remove JavaScript…
+          </Button>
+          <Button className="shrink-0" variant="secondary" onClick={() => openTool("measure")}>
+            Measure…
+          </Button>
           <Button className="shrink-0" variant="secondary" onClick={reversePages}>
             Reverse pages
           </Button>
@@ -1365,6 +1397,44 @@ export function DocumentEditor({ documentId }: { documentId: string }) {
         onClose={() => setActiveModal(null)}
         pdfDoc={pdfDoc}
         pageCount={thumbnails.length}
+      />
+      <PrepareFormModal
+        open={activeModal === "prepareForm"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
+      />
+      <AttachFileModal
+        open={activeModal === "attachFile"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <ManageAttachmentsModal
+        open={activeModal === "manageAttachments"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <AccessibilityCheckModal
+        open={activeModal === "accessibilityCheck"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <RemoveJavaScriptModal
+        open={activeModal === "removeJavaScript"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        onApplied={onToolApplied}
+      />
+      <MeasureToolModal
+        open={activeModal === "measure"}
+        onClose={() => setActiveModal(null)}
+        pdfDoc={pdfDoc}
+        pageCount={thumbnails.length}
+        onApplied={onToolApplied}
       />
 
       {previewIndex !== null && (
